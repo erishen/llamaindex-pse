@@ -6,7 +6,10 @@
 
 基于 [LlamaIndex](https://github.com/run-llama/llama_index) Workflow 的 **Planner-Specialist-Evaluator** 多 Agent 框架。它把通用的「生成 → 程序化核查 → 自动修正」循环建模成一个带类型事件和步骤装饰器的显式 **Workflow**：任何「产出某物，再用程序化方式核查，不通过就自动修」的工作流，只要提供任务名 + 一个核查函数即可挂载。
 
-这是 [`langgraph-pse`](../langgraph-pse) 和 [`crewai-pse`](../crewai-pse) 的 LlamaIndex 版本——同样的 PSE 理念，不同的编排原语：**用 `Workflow` + `@step` + Event + Context**，而非 StateGraph 或 Crew。
+这是 [`langgraph-pse`](../langgraph-pse) 和 [`crewai-pse`](../crewai-pse) 的 LlamaIndex 版本——同样的 PSE 理念，但有两个 LlamaIndex 原生优势：
+
+1. **Workflow + `@step` + Event + Context** — 事件驱动的控制流，而非 StateGraph 或 Crew。
+2. **RAG 加持生成** — 可选的 `retriever` 将真实文档注入 Planner/Specialist，产物从源头 grounded（而非事后检测幻觉再修补）。
 
 ## 工作原理
 
@@ -15,12 +18,12 @@ START → [planner] → specialist → evaluator ─┬─(通过)─▶ END
                                           └─(有问题)─▶ fix → evaluator（循环，最多 N 轮）
 ```
 
-1. **Planner（可选）** — `FunctionCallingAgent` 通过沙箱工具读取上下文，产出执行规划。
-2. **Specialist** — 把规划（或原始任务输入）展开为最终产物（报告 / …）。
+1. **Planner（可选）** — RAG 检索相关文档，`FunctionCallingAgent` 基于真实上下文产出执行规划。
+2. **Specialist** — RAG 检索（Planner 没跑时补检索），把规划展开为最终产物。产物*源头 grounded*——幻觉概率大幅降低。
 3. **Evaluator（合并闸门）** — 每轮都跑，融合两道核查：
-   - **程序化验证**：由任务注入的 `verify_fn(state) -> (bad, ok)` 做确定性检查。刻意**不做** LLM 裁判——确定性验证比让模型评判自己输出可靠得多（例如它保证报告里每个数字都与扫描结果一致）。
-   - **LLM 评审**（仅首轮）：独立评审员对照真实数据审查产物，揪出幻觉、编造的样本名、空泛建议。
-4. **Fix → Evaluator 循环** — Evaluator 步骤返回 `FixEvent`（触发修正）或 `StopEvent`（终止 Workflow），最多重试 `PSE_MAX_RETRIES` 轮。
+   - **程序化验证**：由任务注入的 `verify_fn(state) -> (bad, ok)` 做确定性检查。刻意**不做** LLM 裁判——确定性验证比让模型评判自己输出可靠得多。
+   - **LLM 评审**（仅首轮）：独立评审员对照真实数据**和 RAG 文档**审查产物，揪出幻觉、空泛建议。
+4. **Fix → Evaluator 循环** — Fix 也接收 RAG 上下文，防止凭空编造替代内容。Evaluator 返回 `FixEvent` 或 `StopEvent`，最多重试 `PSE_MAX_RETRIES` 轮。
 
 重试循环（Evaluator → Fix → Evaluator）天生适合**步骤 → 事件 → 步骤**——不用手写循环计数、不用重复调用 team，Workflow 本身就是控制流。
 
@@ -32,8 +35,20 @@ START → [planner] → specialist → evaluator ─┬─(通过)─▶ END
 | 重试循环 | `add_conditional_edges("evaluator", should_fix)` | Evaluator 返回 `FixEvent` 或 `StopEvent` |
 | 工具调用 | LangGraph `create_agent`（LangChain tools） | LlamaIndex `FunctionCallingAgent`（FunctionTool） |
 | 状态 | `TypedDict` 在图边上传递 | `dataclass` 通过 `Context` 传递 |
+| RAG | — | **内置**：`retriever` 参数，Planner/Specialist/Fix 自动 grounded |
 | 验证步骤 | 图内注入的 `verify_fn` | Workflow 内注入的 `verify_fn` |
 | 评审闸门 | 独立 **Evaluator** 节点 | 独立 **Evaluator** 步骤 |
+
+### RAG：LlamaIndex 的核心优势
+
+在 langgraph-pse 中，幻觉靠 Evaluator 的 `verify_fn` 和 LLM 评审**事后检测**，再由 Fix 修补。这可行，但本质是 **detect-and-repair** 循环——模型先编造，再修正。
+
+在 llamaindex-pse 中，传入 `retriever` 后，Planner 和 Specialist 在生成前先接收**检索到的真实文档**。产物从源头就是 grounded 的——待检测的幻觉大幅减少。Evaluator 的 `verify_fn` 仍作为安全网运行，但 RAG 层把防线前移了：
+
+```
+langgraph-pse:  generate → detect(幻觉) → fix → detect → …  （被动修补）
+llamaindex-pse: retrieve → generate(grounded) → verify(残留)  （主动防御）
+```
 
 ## 项目结构
 
@@ -106,6 +121,31 @@ result = asyncio.run(workflow.run(
     max_retries=3,
 ))
 print(result["artifact"])
+```
+
+### RAG 加持示例
+
+```python
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+
+# 从文档构建 LlamaIndex 索引
+documents = SimpleDirectoryReader("./data").load_data()
+index = VectorStoreIndex.from_documents(documents)
+retriever = index.as_retriever(similarity_top_k=5)
+
+# 传入 retriever — Planner/Specialist 自动 grounded
+workflow = build_workflow(
+    task="my-task",
+    verify_fn=my_verify_fn,
+    retriever=retriever,       # ← RAG：LlamaIndex 的核心优势
+    rag_top_k=5,
+    provider="deepseek",
+)
+
+result = asyncio.run(workflow.run(
+    task_input="总结项目的架构设计",
+    max_retries=3,
+))
 ```
 
 ## 安全说明

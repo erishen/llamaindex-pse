@@ -6,7 +6,10 @@
 
 A **Planner-Specialist-Evaluator** multi-agent framework built on [LlamaIndex](https://github.com/run-llama/llama_index) Workflow. It models a generic *generate → verify → fix* loop as an explicit **Workflow** with typed events and step decorators, so that any "produce something, then programmatically check it, and auto-fix if it fails" workflow can be wired up by supplying a task name and a verification function.
 
-This is the LlamaIndex sibling of [`langgraph-pse`](../langgraph-pse) and [`crewai-pse`](../crewai-pse) — same PSE philosophy, different orchestration primitive: a **Workflow with `@step` + Event + Context** instead of a StateGraph or a Crew.
+This is the LlamaIndex sibling of [`langgraph-pse`](../langgraph-pse) and [`crewai-pse`](../crewai-pse) — same PSE philosophy, but with two LlamaIndex-native advantages:
+
+1. **Workflow + `@step` + Event + Context** — event-driven control flow instead of StateGraph or Crew.
+2. **RAG-grounded generation** — optional `retriever` injects real documents into Planner/Specialist, grounding the artifact at the source (not just detecting hallucinations after the fact).
 
 ## How It Works
 
@@ -15,12 +18,12 @@ START → [planner] → specialist → evaluator ─┬─(pass)─▶ END
                                           └─(issues)─▶ fix → evaluator (loop, max N)
 ```
 
-1. **Planner (optional)** — a `FunctionCallingAgent` reads context via sandboxed tools and produces an execution plan.
-2. **Specialist** — expands the plan (or the raw task input) into the final artifact (report, …).
+1. **Planner (optional)** — RAG retrieves relevant documents, then a `FunctionCallingAgent` produces an execution plan grounded in real context.
+2. **Specialist** — RAG retrieves (if Planner didn't), then expands the plan into the final artifact. The artifact is *source-grounded* — far less likely to hallucinate.
 3. **Evaluator (merged gate)** — runs every round and combines two checks:
-   - **Programmatic verification** via a task-supplied `verify_fn(state) -> (bad, ok)`. This is *not* an LLM judge — deterministic checks are far more reliable than asking a model to grade its own output (e.g. it guarantees every number in the report matches the scan).
-   - **LLM review** (first round only): an independent reviewer inspects the artifact against the real data and flags hallucinations, fabricated samples, or weak suggestions.
-4. **Fix → Evaluator loop** — the evaluator step returns either a `FixEvent` (triggering the fix step) or a `StopEvent` (terminating the workflow), up to `PSE_MAX_RETRIES` times.
+   - **Programmatic verification** via a task-supplied `verify_fn(state) -> (bad, ok)`. This is *not* an LLM judge — deterministic checks are far more reliable than asking a model to grade its own output.
+   - **LLM review** (first round only): an independent reviewer inspects the artifact against the real data **and RAG documents**, flagging hallucinations or weak suggestions.
+4. **Fix → Evaluator loop** — Fix also receives RAG context, preventing it from fabricating replacements. The evaluator returns `FixEvent` or `StopEvent`, up to `PSE_MAX_RETRIES` times.
 
 The retry loop is naturally expressed as **step → event → step** — no manual loop counters, no re-invoking a team. The Workflow *is* the control flow.
 
@@ -32,8 +35,20 @@ The retry loop is naturally expressed as **step → event → step** — no manu
 | Retry loop | `add_conditional_edges("evaluator", should_fix)` | Evaluator returns `FixEvent` or `StopEvent` |
 | Tool use | LangGraph `create_agent` (LangChain tools) | LlamaIndex `FunctionCallingAgent` (FunctionTool) |
 | State | `TypedDict` on graph edges | `dataclass` via `Context` |
+| RAG | — | **Built-in**: `retriever` parameter, auto-grounded Planner/Specialist/Fix |
 | Verify step | injected `verify_fn` in the graph | injected `verify_fn` in the workflow |
 | Review gate | dedicated **Evaluator** node | dedicated **Evaluator** step |
+
+### RAG: the LlamaIndex advantage
+
+In langgraph-pse, hallucinations are caught *after* generation by the Evaluator's `verify_fn` and LLM review, then patched by Fix. This works, but it's a **detect-and-repair** loop — the model generates something wrong, then fixes it.
+
+In llamaindex-pse, when a `retriever` is provided, the Planner and Specialist receive **retrieved documents as context** before generating. The artifact is *grounded at the source* — far fewer hallucinations to detect in the first place. The Evaluator's `verify_fn` still runs as a safety net, but the RAG layer shifts the defense left:
+
+```
+langgraph-pse:  generate → detect(hallucination) → fix → detect → …  (reactive)
+llamaindex-pse: retrieve → generate(grounded) → verify(residual)      (proactive)
+```
 
 ## Project Structure
 
@@ -106,6 +121,31 @@ result = asyncio.run(workflow.run(
     max_retries=3,
 ))
 print(result["artifact"])
+```
+
+### RAG-grounded example
+
+```python
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+
+# Build a LlamaIndex index from your documents
+documents = SimpleDirectoryReader("./data").load_data()
+index = VectorStoreIndex.from_documents(documents)
+retriever = index.as_retriever(similarity_top_k=5)
+
+# Pass retriever to the workflow — Planner/Specialist auto-grounded
+workflow = build_workflow(
+    task="my-task",
+    verify_fn=my_verify_fn,
+    retriever=retriever,       # ← RAG: the LlamaIndex advantage
+    rag_top_k=5,
+    provider="deepseek",
+)
+
+result = asyncio.run(workflow.run(
+    task_input="Summarize the project's architecture",
+    max_retries=3,
+))
 ```
 
 ## Security Notes
