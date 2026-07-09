@@ -43,17 +43,10 @@ llamaindex-pse/
 │   ├── __init__.py          # 公开 API: build_workflow(), create_llm()
 │   ├── config.py            # 从环境变量 / .env 读取配置
 │   ├── model.py             # LlamaIndex OpenAI 兼容 LLM（deepseek / agnes）
-│   ├── tools.py             # read_file（沙箱）+ run_bash（沙箱）+ query_crm（只读）
+│   ├── tools.py             # read_file（沙箱）+ run_bash（沙箱）
 │   ├── prompts.py           # 提示词加载（tasks/<task>/prompts/*.md）
 │   └── workflow.py          # Workflow: planner → specialist → evaluator → fix
-├── tasks/
-│   └── crm-qa/              # 任务：personal-crm 数据质量看门狗
-│       ├── run.py            # 入口——确定性扫描（默认）+ 可选 LLM 报告
-│       ├── qa_scan.py        # 只读 SQLite QA 扫描器
-│       └── prompts/
-│           ├── planner.md    # Planner 系统提示词
-│           ├── specialist.md # Specialist 系统提示词
-│           └── evaluator.md  # Evaluator 系统提示词（评审规则）
+├── tasks/                   # 使用者自行创建的任务（框架不内置）
 ├── pyproject.toml
 ├── Makefile
 └── .env.example
@@ -73,7 +66,7 @@ make install        # 或: uv sync
 cp .env.example .env
 ```
 
-生成 LLM 报告需要 **`OPENAI_*` 组（DeepSeek，OpenAI 兼容）** 或 **`AGNES_*` 组** 二者之一；通过 `--provider {deepseek,agnes}` 切换。
+需要 **`OPENAI_*` 组（DeepSeek，OpenAI 兼容）** 或 **`AGNES_*` 组** 二者之一；通过 `provider` 参数切换。
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
@@ -84,34 +77,9 @@ cp .env.example .env
 | `AGNES_BASE_URL` | ✅† | 备选：Agnes base URL |
 | `AGNES_MODEL` | ✅† | 备选：Agnes 模型名（如 `agnes-2.0-flash`） |
 | `PSE_ROOT` | ✅ | `read_file` / `run_bash` 沙箱根路径 |
-| `CRM_DB_PATH` | ✅ | personal-crm 的 `crm.db` 路径（只读） |
 | `PSE_MAX_RETRIES` | | 最大验证/修正轮数（默认 `3`） |
 
-\* 使用 `--provider deepseek`（默认）时必填。 &nbsp; † 使用 `--provider agnes` 时必填。
-
-## 用法 — crm-qa（数据质量看门狗）
-
-```bash
-# 仅确定性扫描（零成本，无需 API key）
-make crm-qa
-make crm-qa-scan
-python tasks/crm-qa/run.py --db /path/to/crm.db
-
-# 用 LLM 生成自然语言 QA 报告（需 key）
-make crm-qa-report            # --provider deepseek（默认）
-make crm-qa-agnes             # --provider agnes
-python tasks/crm-qa/run.py --llm --provider agnes
-
-# 透传额外参数（例如限制重试轮数）
-make crm-qa-agnes FLAGS="--max-retries 2"
-
-# 列出全部命令
-make help
-```
-
-看门狗扫描 `crm.db` 的已知数据质量问题（重复 `wechat_id`、未改名、clean 字段缺失、孤儿聊天、时区错位、空记录等）；加 `--llm` 会写出一份**数字经过核查、保证与扫描一致**的中文 QA 报告（由 `verify_fn` 强制保证）。
-
-> **设计原则 — 只报警、不修复。** crm-qa 故意*只报告*问题，绝不修改 `crm.db`。所有数据库访问都是只读（扫描器用 `mode=ro&immutable=1`，`query_crm` 只允许单条 `SELECT`）。任何修复都留在人工步骤，绝不让模型改动生产数据。
+\* 使用 `provider="deepseek"`（默认）时必填。 &nbsp; † 使用 `provider="agnes"` 时必填。
 
 ## 新建一个任务
 
@@ -119,11 +87,31 @@ make help
 2. 调用 `build_workflow(task="<your-task>", verify_fn=..., use_planner=...)`。
 3. `verify_fn(state) -> (bad, ok)` 即你的确定性核查；Workflow 会循环 `fix` 直到通过或达到 `max_retries`。
 
+### 快速示例
+
+```python
+import asyncio
+from llamaindex_pse import build_workflow
+
+workflow = build_workflow(
+    task="my-task",
+    verify_fn=my_verify_fn,
+    use_planner=True,
+    provider="deepseek",
+)
+
+result = asyncio.run(workflow.run(
+    task_input="你的任务描述",
+    task_data={"key": "value"},  # 可选，供 verify_fn 使用
+    max_retries=3,
+))
+print(result["artifact"])
+```
+
 ## 安全说明
 
-- **无硬编码密钥。** 所有凭证均从 `.env` 读取，`.env` 已 gitignore；含个人数据的生成物（`qa_report.md`、`scan_*.json`）同样已被忽略。
+- **无硬编码密钥。** 所有凭证均从 `.env` 读取，`.env` 已 gitignore。
 - **沙箱工具.** `read_file` 只能读 `PSE_ROOT` 内文件；`run_bash` 拦截破坏性命令（`rm -rf`、`dd`、`curl|sh` 等）并在 `PSE_ROOT` 内运行。
-- **数据库只读.** `query_crm` 只允许对 `crm.db` 的单条 `SELECT`；QA 扫描器以 `mode=ro&immutable=1` 打开库。
 - **无网络暴露服务.** 本项目仅作为本地 CLI 运行。
 
 ## 许可证

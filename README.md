@@ -43,17 +43,10 @@ llamaindex-pse/
 │   ├── __init__.py          # Public API: build_workflow(), create_llm()
 │   ├── config.py            # Settings from environment / .env
 │   ├── model.py             # LlamaIndex OpenAI-compatible LLM (deepseek / agnes)
-│   ├── tools.py             # read_file (sandboxed) + run_bash (sandboxed) + query_crm (read-only)
+│   ├── tools.py             # read_file (sandboxed) + run_bash (sandboxed)
 │   ├── prompts.py           # Prompt loader (tasks/<task>/prompts/*.md)
 │   └── workflow.py          # Workflow: planner → specialist → evaluator → fix
-├── tasks/
-│   └── crm-qa/              # Task: personal-crm data-quality watchdog
-│       ├── run.py            # Entry — deterministic scan (default) + optional LLM report
-│       ├── qa_scan.py        # Read-only SQLite QA scanner
-│       └── prompts/
-│           ├── planner.md    # Planner system prompt
-│           ├── specialist.md # Specialist system prompt
-│           └── evaluator.md  # Evaluator system prompt (LLM review rules)
+├── tasks/                   # User-created tasks (not bundled)
 ├── pyproject.toml
 ├── Makefile
 └── .env.example
@@ -73,7 +66,7 @@ Copy `.env.example` to `.env` and fill in your values:
 cp .env.example .env
 ```
 
-For the LLM report you need **either** the `OPENAI_*` set (DeepSeek is OpenAI-compatible) **or** the `AGNES_*` set. Both are supported via `--provider {deepseek,agnes}`.
+You need **either** the `OPENAI_*` set (DeepSeek is OpenAI-compatible) **or** the `AGNES_*` set. Both are supported via `provider` parameter.
 
 | Variable | Required | Description |
 |---|---|---|
@@ -84,46 +77,41 @@ For the LLM report you need **either** the `OPENAI_*` set (DeepSeek is OpenAI-co
 | `AGNES_BASE_URL` | ✅† | Alternative: Agnes base URL |
 | `AGNES_MODEL` | ✅† | Alternative: Agnes model name (e.g. `agnes-2.0-flash`) |
 | `PSE_ROOT` | ✅ | Sandbox root for `read_file` / `run_bash` |
-| `CRM_DB_PATH` | ✅ | Path to personal-crm's `crm.db` (read-only) |
 | `PSE_MAX_RETRIES` | | Max evaluator/fix rounds (default: `3`) |
 
-\* required if `--provider deepseek` (the default).  &nbsp; † required if `--provider agnes`.
+\* required when `provider="deepseek"` (the default).  &nbsp; † required when `provider="agnes"`.
 
-## Usage — crm-qa (data-quality watchdog)
-
-```bash
-# Deterministic scan only (zero cost, no API key needed)
-make crm-qa
-make crm-qa-scan
-python tasks/crm-qa/run.py --db /path/to/crm.db
-
-# Natural-language QA report via LLM (needs key)
-make crm-qa-report            # --provider deepseek (default)
-make crm-qa-agnes             # --provider agnes
-python tasks/crm-qa/run.py --llm --provider agnes
-
-# Pass extra flags (e.g. cap retries)
-make crm-qa-agnes FLAGS="--max-retries 2"
-
-# List every command
-make help
-```
-
-The watchdog scans `crm.db` for known data-quality issues (duplicate `wechat_id`, un-renamed names, missing clean fields, orphan chats, timezone mismatches, empty records, …) and, with `--llm`, writes a verified Chinese QA report whose numbers are **guaranteed to match the scan** (enforced by `verify_fn`).
-
-> **Design principle — watchdog only, no auto-repair.** crm-qa intentionally *reports* problems; it never modifies `crm.db`. All DB access is read-only (`mode=ro&immutable=1` for the scanner, single `SELECT` only for `query_crm`). Any repair stays a manual step so a model can never mutate production data.
-
-## Building a new task
+## Building a task
 
 1. Create `tasks/<your-task>/prompts/{planner,specialist,evaluator}.md`.
 2. Call `build_workflow(task="<your-task>", verify_fn=..., use_planner=...)`.
 3. `verify_fn(state) -> (bad, ok)` is your deterministic check; the workflow loops `fix` until it passes or hits `max_retries`.
 
+### Quick example
+
+```python
+import asyncio
+from llamaindex_pse import build_workflow
+
+workflow = build_workflow(
+    task="my-task",
+    verify_fn=my_verify_fn,
+    use_planner=True,
+    provider="deepseek",
+)
+
+result = asyncio.run(workflow.run(
+    task_input="Your task description here",
+    task_data={"key": "value"},  # optional extra data for verify_fn
+    max_retries=3,
+))
+print(result["artifact"])
+```
+
 ## Security Notes
 
-- **No hardcoded secrets.** All credentials are read from `.env`, which is gitignored. Generated artifacts containing PII (`qa_report.md`, `scan_*.json`) are also gitignored.
+- **No hardcoded secrets.** All credentials are read from `.env`, which is gitignored.
 - **Sandboxed tools.** `read_file` only reads under `PSE_ROOT`; `run_bash` blocks destructive commands (`rm -rf`, `dd`, `curl|sh`, …) and runs in `PSE_ROOT`.
-- **Read-only DB access.** `query_crm` allows only single `SELECT` statements against `crm.db`; the QA scanner opens the DB in `mode=ro&immutable=1`.
 - **No network-exposed service.** This project runs locally as a CLI.
 
 ## License

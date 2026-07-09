@@ -1,17 +1,14 @@
 """工具函数 — 文件读取（沙箱）和 bash 执行（沙箱）。
 
 read_file 限制只能读取项目根目录内的文件；run_bash 禁止破坏性命令，
-工作目录限定在项目根内。与 langgraph-pse 的沙箱策略保持一致。
+工作目录限定在项目根内。
 
 使用 LlamaIndex FunctionTool 封装。
 """
 
-import json
 import os
 import re
-import sqlite3
 import subprocess
-import sys
 from pathlib import Path
 
 from llama_index.core.tools import FunctionTool
@@ -61,62 +58,8 @@ def run_bash(command: str) -> str:
         return f"[错误] {e}"
 
 
-# ── personal-crm 只读查询（沙箱） ──
-# 中性占位默认——真实库路径只通过环境变量 CRM_DB_PATH 注入，绝不硬编码个人路径。
-_CRM_DB_DEFAULT = "crm.db"
-
-
-def query_crm(sql: str) -> str:
-    """对 personal-crm 的 SQLite 库执行只读 SELECT 查询（沙箱：仅单条 SELECT，仅限 crm.db）。
-
-    参数 sql 为 SQL 语句，例如 "SELECT COUNT(*) FROM contacts"。禁止 INSERT/UPDATE/DELETE 和多语句。
-    """
-    s = sql.strip().rstrip(";").strip()
-    if not s.lower().startswith("select"):
-        return "[拒绝] 仅允许 SELECT 查询。"
-    if ";" in s:
-        return "[拒绝] 仅允许单条 SELECT，不支持多语句。"
-    db = os.getenv("CRM_DB_PATH", _CRM_DB_DEFAULT)
-    try:
-        con = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
-        cur = con.cursor()
-        cur.execute(s)
-        rows = cur.fetchall()
-        con.close()
-    except Exception as e:
-        return f"[错误] {e}"
-    if not rows:
-        return "(0 行)"
-    lines = [str(tuple(r)) for r in rows[:50]]
-    tail = "" if len(rows) <= 50 else f"\n... 共 {len(rows)} 行，仅显示前 50"
-    return "\n".join(lines) + tail
-
-
-def crm_qa_scan(db_path: str = "") -> str:
-    """运行 personal-crm 数据质量扫描，返回 JSON 报告（只读，绝不修改数据库）。
-
-    可选参数 db_path 为 crm.db 路径；留空则用默认路径或环境变量 CRM_DB_PATH。
-    返回的 JSON 含 summary（各表行数）与 findings（每项含 check/severity/count/description）。
-    """
-    try:
-        sys.path.insert(
-            0,
-            str(Path(__file__).resolve().parent.parent.parent / "tasks" / "crm-qa"),
-        )
-        from qa_scan import scan as _scan
-    except Exception as e:
-        return f"[错误] 无法加载扫描器: {e}"
-    db = db_path or os.getenv("CRM_DB_PATH", _CRM_DB_DEFAULT)
-    try:
-        return json.dumps(_scan(db), ensure_ascii=False, indent=2)
-    except Exception as e:
-        return f"[错误] 扫描失败: {e}"
-
-
 # ── LlamaIndex FunctionTool 封装 ──
 read_file_tool = FunctionTool.from_defaults(fn=read_file)
 run_bash_tool = FunctionTool.from_defaults(fn=run_bash)
-query_crm_tool = FunctionTool.from_defaults(fn=query_crm)
-crm_qa_scan_tool = FunctionTool.from_defaults(fn=crm_qa_scan)
 
-TOOLS = [read_file_tool, run_bash_tool, query_crm_tool, crm_qa_scan_tool]
+TOOLS = [read_file_tool, run_bash_tool]

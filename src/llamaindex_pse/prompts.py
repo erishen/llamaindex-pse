@@ -1,4 +1,8 @@
-"""提示词加载 — 从任务目录的 prompts/*.md 加载。"""
+"""提示词加载 — 从任务目录的 prompts/*.md 加载。
+
+任务目录约定：tasks/<task>/prompts/{planner,specialist,evaluator}.md
+任务目录由使用者自行创建，框架本身不内置任何任务。
+"""
 
 from pathlib import Path
 

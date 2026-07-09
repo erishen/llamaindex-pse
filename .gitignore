@@ -3,9 +3,3 @@ __pycache__
 *.egg-info
 outputs/
 .venv
-projects.json
-
-# 生成的产物（含真实个人 CRM 数据，禁止入库）
-qa_report.md
-*.report.md
-scan_*.json
