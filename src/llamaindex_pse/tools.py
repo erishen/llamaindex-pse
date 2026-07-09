@@ -1,0 +1,122 @@
+"""工具函数 — 文件读取（沙箱）和 bash 执行（沙箱）。
+
+read_file 限制只能读取项目根目录内的文件；run_bash 禁止破坏性命令，
+工作目录限定在项目根内。与 langgraph-pse 的沙箱策略保持一致。
+
+使用 LlamaIndex FunctionTool 封装。
+"""
+
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
+
+from llama_index.core.tools import FunctionTool
+
+# 项目根目录，限制文件访问范围（可由 PSE_ROOT 覆盖）
+_PROJECT_ROOT = Path(os.getenv("PSE_ROOT", Path.cwd())).resolve()
+
+
+def read_file(path: str) -> str:
+    """读取文件内容。参数 path 为文件路径（限定在项目目录内）。"""
+    p = Path(path).resolve()
+    if not str(p).startswith(str(_PROJECT_ROOT)):
+        return f"[错误] 路径超出项目范围: {path}"
+    if not p.exists():
+        return f"[错误] 文件不存在: {path}"
+    if not p.is_file():
+        return f"[错误] 不是文件: {path}"
+    return p.read_text(encoding="utf-8")
+
+
+# 危险命令片段黑名单（命中即拒绝，降低被诱导执行破坏命令的风险）
+_DANGEROUS_PATTERNS = [
+    r"\brm\s+-rf\b", r"\brm\s+-fr\b", r"\brm\s+-r\b", r"\brm\s+-R\b",
+    r"\bmkfs\b", r"\bdd\b\s+if=", r":\(\)\s*\{", r"\bshutdown\b",
+    r"\breboot\b", r"\bhalt\b", r"\bpoweroff\b", r">\s*/dev/sd",
+    r"\bchmod\b\s+-R\s+777\s+/", r"\bchown\b\s+-R\s+.*\s+/",
+    r"curl\b[^\n]*\|\s*(sh|bash)", r"wget\b[^\n]*\|\s*(sh|bash)",
+    r"\bnc\b[^\n]*-e\b",
+]
+
+
+def run_bash(command: str) -> str:
+    """执行 bash 命令并返回输出（受限沙箱：禁止破坏性命令，工作目录限定在项目根内）。"""
+    for pat in _DANGEROUS_PATTERNS:
+        if re.search(pat, command):
+            return (
+                f"[拒绝] 命令命中危险模式（{pat}），已被沙箱拦截。"
+                "如需执行破坏性操作请人工进行。"
+            )
+    try:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True,
+            timeout=30, cwd=str(_PROJECT_ROOT),
+        )
+        return result.stdout + "\n" + result.stderr
+    except Exception as e:
+        return f"[错误] {e}"
+
+
+# ── personal-crm 只读查询（沙箱） ──
+# 中性占位默认——真实库路径只通过环境变量 CRM_DB_PATH 注入，绝不硬编码个人路径。
+_CRM_DB_DEFAULT = "crm.db"
+
+
+def query_crm(sql: str) -> str:
+    """对 personal-crm 的 SQLite 库执行只读 SELECT 查询（沙箱：仅单条 SELECT，仅限 crm.db）。
+
+    参数 sql 为 SQL 语句，例如 "SELECT COUNT(*) FROM contacts"。禁止 INSERT/UPDATE/DELETE 和多语句。
+    """
+    s = sql.strip().rstrip(";").strip()
+    if not s.lower().startswith("select"):
+        return "[拒绝] 仅允许 SELECT 查询。"
+    if ";" in s:
+        return "[拒绝] 仅允许单条 SELECT，不支持多语句。"
+    db = os.getenv("CRM_DB_PATH", _CRM_DB_DEFAULT)
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
+        cur = con.cursor()
+        cur.execute(s)
+        rows = cur.fetchall()
+        con.close()
+    except Exception as e:
+        return f"[错误] {e}"
+    if not rows:
+        return "(0 行)"
+    lines = [str(tuple(r)) for r in rows[:50]]
+    tail = "" if len(rows) <= 50 else f"\n... 共 {len(rows)} 行，仅显示前 50"
+    return "\n".join(lines) + tail
+
+
+def crm_qa_scan(db_path: str = "") -> str:
+    """运行 personal-crm 数据质量扫描，返回 JSON 报告（只读，绝不修改数据库）。
+
+    可选参数 db_path 为 crm.db 路径；留空则用默认路径或环境变量 CRM_DB_PATH。
+    返回的 JSON 含 summary（各表行数）与 findings（每项含 check/severity/count/description）。
+    """
+    try:
+        sys.path.insert(
+            0,
+            str(Path(__file__).resolve().parent.parent.parent / "tasks" / "crm-qa"),
+        )
+        from qa_scan import scan as _scan
+    except Exception as e:
+        return f"[错误] 无法加载扫描器: {e}"
+    db = db_path or os.getenv("CRM_DB_PATH", _CRM_DB_DEFAULT)
+    try:
+        return json.dumps(_scan(db), ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"[错误] 扫描失败: {e}"
+
+
+# ── LlamaIndex FunctionTool 封装 ──
+read_file_tool = FunctionTool.from_defaults(fn=read_file)
+run_bash_tool = FunctionTool.from_defaults(fn=run_bash)
+query_crm_tool = FunctionTool.from_defaults(fn=query_crm)
+crm_qa_scan_tool = FunctionTool.from_defaults(fn=crm_qa_scan)
+
+TOOLS = [read_file_tool, run_bash_tool, query_crm_tool, crm_qa_scan_tool]

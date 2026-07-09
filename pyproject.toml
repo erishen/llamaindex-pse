@@ -1,0 +1,32 @@
+[project]
+name = "llamaindex-pse"
+version = "0.1.0"
+description = "Planner-Specialist-Evaluator three-role agent framework powered by LlamaIndex Workflow"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "llama-index>=0.12.0",
+    "llama-index-llms-openai>=0.3.0",
+    "llama-index-core>=0.12.0",
+    "python-dotenv>=1.0.0",
+    "openai>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llamaindex_pse"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
