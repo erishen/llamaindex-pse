@@ -77,7 +77,7 @@ def _verify_state(state: dict) -> tuple[list, list]:
     return _verify_resume(state.get("artifact", ""), rag_context)
 
 
-def main():
+async def main():
     ap = argparse.ArgumentParser(description="RAG 加持的简历定制/推荐 (llamaindex-pse)")
     ap.add_argument("--jd", type=str, help="JD 文件路径（定制模式）")
     ap.add_argument("--jd-text", type=str, help="JD 文本（定制模式，直接传入）")
@@ -210,10 +210,11 @@ def main():
         )
 
         print(f"\n🚀 自由推荐模式 (provider={args.provider}, max_retries={max_retries})")
-        result = asyncio.run(workflow.run(
+        handler = workflow.run(
             task_input=task_input,
             max_retries=max_retries,
-        ))
+        )
+        result = await handler
 
         artifact = result.get("artifact", "")
         out_path = BASE / "recommended_resume.md"
@@ -237,10 +238,11 @@ def main():
         )
 
         print(f"\n🚀 JD 定制模式 (provider={args.provider}, max_retries={max_retries})")
-        result = asyncio.run(workflow.run(
+        handler = workflow.run(
             task_input=task_input,
             max_retries=max_retries,
-        ))
+        )
+        result = await handler
 
         resume = result.get("artifact", "")
         out_path = BASE / "tailored_resume.md"
@@ -249,4 +251,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
