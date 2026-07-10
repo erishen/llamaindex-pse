@@ -120,15 +120,25 @@ def main():
     # 加载 LlamaIndex 核心
     try:
         from llamaindex_pse.config import settings
+        from llamaindex_pse.model import create_llm, create_embedding
         from llamaindex_pse.workflow import build_workflow
     except Exception as e:
         print(f"❌ 无法加载 llamaindex 运行环境: {e}\n（请先 `uv sync`）")
         sys.exit(1)
 
+    # 配置全局 LLM + Embedding
+    from llama_index.core import Settings
+    Settings.llm = create_llm(args.provider)
+    try:
+        Settings.embed_model = create_embedding()
+        print(f"   Embedding: {settings.EMBEDDING_MODEL}")
+    except RuntimeError:
+        print("   ⚠️ 未配置 EMBEDDING_MODEL，将使用 LlamaIndex 默认 embedding")
+
     # 构建 RAG index
     print(f"📚 加载文档: {docs_dir}")
     try:
-        from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
+        from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
         from llama_index.core.node_parser import SentenceSplitter
 
         documents = SimpleDirectoryReader(docs_dir, recursive=True).load_data()
@@ -137,7 +147,7 @@ def main():
             sys.exit(1)
         print(f"   加载了 {len(documents)} 个文档片段")
 
-        # 构建 index
+        # 构建 index（使用已配置的 Settings.embed_model）
         splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
         index = VectorStoreIndex.from_documents(documents, transformations=[splitter])
         retriever = index.as_retriever(similarity_top_k=args.top_k)

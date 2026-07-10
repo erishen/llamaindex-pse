@@ -19,6 +19,10 @@ class Settings:
     AGNES_KEY: str = os.getenv("AGNES_KEY", "")
     AGNES_BASE_URL: str = os.getenv("AGNES_BASE_URL", "")
     AGNES_MODEL: str = os.getenv("AGNES_MODEL", "")
+    # Embedding 模型（RAG 索引用，复用 OPENAI 兼容协议）
+    EMBEDDING_API_KEY: str = os.getenv("EMBEDDING_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+    EMBEDDING_BASE_URL: str = os.getenv("EMBEDDING_BASE_URL", os.getenv("OPENAI_BASE_URL", ""))
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "")
 
 
 settings = Settings()
