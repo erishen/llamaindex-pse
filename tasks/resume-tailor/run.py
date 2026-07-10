@@ -1,14 +1,12 @@
-"""LlamaIndex PSE — resume-tailor 任务：RAG 加持的简历定制。
+"""LlamaIndex PSE — resume-tailor 任务：RAG 加持的简历定制/推荐。
 
-流程：
-    1. 从 work/docs 加载文档，构建 LlamaIndex VectorStoreIndex
-    2. 传入 JD（岗位描述）作为 task_input
-    3. PSE Workflow:
-       Planner(RAG检索) → Specialist(RAG grounded 撰写) → Evaluator(核查) → (Fix)
+两种模式：
+    1. JD 定制模式：传入 JD，RAG 检索文档，定制针对性简历
+    2. 自由推荐模式：无需 JD，根据你的经历 + 国内招聘行情，推荐最适合的岗位
 
 用法:
-    python run.py --jd path/to/jd.md          # 从文件读取 JD
-    python run.py --jd-text "JD 内容..."       # 直接传入 JD 文本
+    python run.py --jd path/to/jd.md          # JD 定制模式
+    python run.py --recommend                  # 自由推荐模式（无需 JD）
     python run.py --docs /path/to/docs         # 指定文档目录（默认 work/docs）
     python run.py --provider agnes              # 使用 Agnes 网关
 """
@@ -33,10 +31,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
 def _verify_resume(resume: str, rag_context: str) -> tuple[list, list]:
-    """程序化验证：简历中的关键声明应能在 RAG 上下文中找到出处。
-
-    返回 (不符列表, 符合列表)。
-    """
+    """程序化验证：简历中的关键声明应能在 RAG 上下文中找到出处。"""
     bad: list[str] = []
     ok: list[str] = []
 
@@ -54,15 +49,7 @@ def _verify_resume(resume: str, rag_context: str) -> tuple[list, list]:
         else:
             bad.append(f"年份 {y} 未在源文档中找到，可能虚构")
 
-    # 2. 检查简历中的公司名/项目名是否在上下文中出现
-    #    从上下文中提取可能的专有名词（简单启发式：首字母大写的连续词）
-    context_proper_nouns = set()
-    for m in re.finditer(r"[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*", rag_context):
-        noun = m.group()
-        if len(noun) > 3:  # 过滤掉太短的
-            context_proper_nouns.add(noun)
-
-    # 3. 检查量化数据（数字 + 单位）是否在上下文中出现
+    # 2. 检查量化数据（数字 + 单位）是否在上下文中出现
     quant_pattern = r"(\d+(?:\.\d+)?%|\d+(?:,\d{3})+(?:\+)?|\d+\+?\s*(?:人|万|倍|ms|GB|TB|个))"
     resume_quants = set(re.findall(quant_pattern, resume))
     context_quants = set(re.findall(quant_pattern, rag_context))
@@ -72,7 +59,7 @@ def _verify_resume(resume: str, rag_context: str) -> tuple[list, list]:
         else:
             bad.append(f"量化数据 {q} 未在源文档中找到，可能编造")
 
-    # 4. 基本长度检查
+    # 3. 基本长度检查
     if len(resume) < 200:
         bad.append("简历内容过短（< 200 字），可能不完整")
     elif len(resume) > 10000:
@@ -87,9 +74,11 @@ def _verify_state(state: dict) -> tuple[list, list]:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="RAG 加持的简历定制 (llamaindex-pse)")
-    ap.add_argument("--jd", type=str, help="JD 文件路径")
-    ap.add_argument("--jd-text", type=str, help="JD 文本（直接传入）")
+    ap = argparse.ArgumentParser(description="RAG 加持的简历定制/推荐 (llamaindex-pse)")
+    ap.add_argument("--jd", type=str, help="JD 文件路径（定制模式）")
+    ap.add_argument("--jd-text", type=str, help="JD 文本（定制模式，直接传入）")
+    ap.add_argument("--recommend", action="store_true",
+                    help="自由推荐模式：无需 JD，根据你的经历 + 国内行情推荐最适合的岗位")
     ap.add_argument("--docs", type=str,
                     default=os.getenv("RESUME_DOCS_PATH", ""),
                     help="文档目录路径（默认从 PSE_ROOT/work/docs 加载）")
@@ -101,14 +90,20 @@ def main():
                     help="强制重建索引（忽略本地缓存）")
     args = ap.parse_args()
 
-    # 读取 JD
-    if args.jd:
-        jd_text = Path(args.jd).read_text(encoding="utf-8")
-    elif args.jd_text:
-        jd_text = args.jd_text
-    else:
-        print("❌ 请提供 --jd 或 --jd-text")
+    # 模式检查
+    is_recommend = args.recommend
+    has_jd = args.jd or args.jd_text
+    if not is_recommend and not has_jd:
+        print("❌ 请提供 --jd/--jd-text（定制模式）或 --recommend（推荐模式）")
         sys.exit(1)
+
+    # 读取 JD（定制模式）
+    jd_text = ""
+    if has_jd:
+        if args.jd:
+            jd_text = Path(args.jd).read_text(encoding="utf-8")
+        else:
+            jd_text = args.jd_text
 
     # 确定文档目录
     docs_dir = args.docs
@@ -143,7 +138,6 @@ def main():
     retriever = None
 
     if not args.rebuild and index_dir.exists():
-        # 从磁盘加载已有索引
         print(f"📚 从本地缓存加载索引: {index_dir}")
         try:
             from llama_index.core import VectorStoreIndex, StorageContext, load_index_from_storage
@@ -168,13 +162,11 @@ def main():
                 sys.exit(1)
             print(f"   加载了 {len(documents)} 个文档片段")
 
-            # 构建 index（使用已配置的 Settings.embed_model）
             splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
             index = VectorStoreIndex.from_documents(documents, transformations=[splitter])
             retriever = index.as_retriever(similarity_top_k=args.top_k)
             print(f"   索引构建完成，retriever top_k={args.top_k}")
 
-            # 持久化到磁盘
             index.storage_context.persist(persist_dir=str(index_dir))
             print(f"   索引已缓存 → {index_dir}")
         except Exception as e:
@@ -183,30 +175,73 @@ def main():
 
     # 构建 PSE workflow
     max_retries = settings.PSE_MAX_RETRIES or 3
-    workflow = build_workflow(
-        task="resume-tailor",
-        verify_fn=_verify_state,
-        use_planner=True,
-        max_retries=max_retries,
-        provider=args.provider,
-        retriever=retriever,
-        rag_top_k=args.top_k,
-    )
 
-    task_input = (
-        f"请根据以下 JD 定制简历：\n\n## 岗位描述\n{jd_text}"
-    )
+    if is_recommend:
+        # ── 自由推荐模式 ──
+        # 加载推荐模式的专用提示词
+        prompts_dir = BASE / "prompts"
+        planner_prompt = (prompts_dir / "recommend_planner.md").read_text(encoding="utf-8")
+        specialist_prompt = (prompts_dir / "recommend_specialist.md").read_text(encoding="utf-8")
+        evaluator_prompt = (prompts_dir / "evaluator.md").read_text(encoding="utf-8")
 
-    print(f"\n🚀 开始简历定制 (provider={args.provider}, max_retries={max_retries})")
-    result = asyncio.run(workflow.run(
-        task_input=task_input,
-        max_retries=max_retries,
-    ))
+        workflow = build_workflow(
+            task="resume-tailor",
+            verify_fn=_verify_state,
+            use_planner=True,
+            max_retries=max_retries,
+            provider=args.provider,
+            retriever=retriever,
+            rag_top_k=args.top_k,
+        )
+        # 覆盖提示词为推荐模式专用
+        workflow._planner_prompt = planner_prompt
+        workflow._specialist_prompt = specialist_prompt
+        workflow._evaluator_prompt = evaluator_prompt
 
-    resume = result.get("artifact", "")
-    out_path = BASE / "tailored_resume.md"
-    out_path.write_text(resume, encoding="utf-8")
-    print(f"\n✅ 定制简历已保存 → {out_path}")
+        # 推荐模式：多维度检索，覆盖技能/经历/项目
+        task_input = (
+            "请分析我的职业背景，结合当前国内招聘市场行情，"
+            "推荐最适合我的岗位方向，并为排名第一的岗位定制简历。\n\n"
+            "检索关键词：技术栈、项目经验、工作经历、架构设计、AI 工程化、团队管理"
+        )
+
+        print(f"\n🚀 自由推荐模式 (provider={args.provider}, max_retries={max_retries})")
+        result = asyncio.run(workflow.run(
+            task_input=task_input,
+            max_retries=max_retries,
+        ))
+
+        artifact = result.get("artifact", "")
+        out_path = BASE / "recommended_resume.md"
+        out_path.write_text(artifact, encoding="utf-8")
+        print(f"\n✅ 推荐简历已保存 → {out_path}")
+
+    else:
+        # ── JD 定制模式 ──
+        workflow = build_workflow(
+            task="resume-tailor",
+            verify_fn=_verify_state,
+            use_planner=True,
+            max_retries=max_retries,
+            provider=args.provider,
+            retriever=retriever,
+            rag_top_k=args.top_k,
+        )
+
+        task_input = (
+            f"请根据以下 JD 定制简历：\n\n## 岗位描述\n{jd_text}"
+        )
+
+        print(f"\n🚀 JD 定制模式 (provider={args.provider}, max_retries={max_retries})")
+        result = asyncio.run(workflow.run(
+            task_input=task_input,
+            max_retries=max_retries,
+        ))
+
+        resume = result.get("artifact", "")
+        out_path = BASE / "tailored_resume.md"
+        out_path.write_text(resume, encoding="utf-8")
+        print(f"\n✅ 定制简历已保存 → {out_path}")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ outputs/
 
 # 生成的简历（含个人信息，禁止入库）
 tailored_resume.md
+recommended_resume.md
 
 # Embedding 索引缓存（可本地重建，不入库）
 .index_cache/
