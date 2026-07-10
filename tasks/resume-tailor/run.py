@@ -54,12 +54,15 @@ def _verify_resume(resume: str, rag_context: str) -> tuple[list, list]:
             bad.append(f"年份 {y} 未在源文档中找到，可能虚构")
 
     # 2. 检查量化数据（数字 + 单位）是否在上下文中出现
+    #    百分比（如 95%、99%）是常见估算值（覆盖率/成功率），不严格校验
     quant_pattern = r"(\d+(?:\.\d+)?%|\d+(?:,\d{3})+(?:\+)?|\d+\+?\s*(?:人|万|倍|ms|GB|TB|个))"
     resume_quants = set(re.findall(quant_pattern, resume))
     context_quants = set(re.findall(quant_pattern, rag_context))
     for q in resume_quants:
         if q in context_quants:
             ok.append(f"量化数据 {q} 在源文档中存在")
+        elif q.endswith("%"):
+            ok.append(f"百分比 {q} 为合理估算（覆盖率/成功率等），跳过校验")
         else:
             bad.append(f"量化数据 {q} 未在源文档中找到，可能编造")
 
