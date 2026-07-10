@@ -80,6 +80,20 @@ def _verify_resume(resume: str, rag_context: str) -> tuple[list, list]:
     elif len(resume) > 10000:
         bad.append("简历内容过长（> 10000 字），可能包含冗余")
 
+    # 4. 禁止"20年"/"20 年"/"二十年"等年限表述
+    if re.search(r"20\s*年|二十年", resume):
+        bad.append("简历中出现'20年'等年限表述，应删除（不强调工作年限）")
+    else:
+        ok.append("无年限表述")
+
+    # 5. 重点项目必须有起止时间
+    project_blocks = re.findall(r"^###\s+.+?\([^)]*\)", resume, re.MULTILINE)
+    projects_without_time = [p for p in project_blocks if not re.search(r"\d{4}", p)]
+    if projects_without_time:
+        bad.append(f"重点项目缺少起止时间：{projects_without_time}")
+    elif project_blocks:
+        ok.append(f"所有 {len(project_blocks)} 个重点项目均包含时间范围")
+
     return bad, ok
 
 
