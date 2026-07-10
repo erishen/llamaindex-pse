@@ -1,4 +1,4 @@
-.PHONY: install lint clean resume-tailor resume-tailor-agnes help
+.PHONY: install lint clean resume-tailor resume-tailor-agnes resume-tailor-rebuild help
 
 PY := uv run python
 
@@ -10,7 +10,7 @@ lint: ## 代码检查
 
 clean: ## 清理缓存/构建产物
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	rm -rf dist/ *.egg-info
+	rm -rf dist/ *.egg-info .index_cache/
 
 # RAG 加持的简历定制
 # 用法: make resume-tailor JD=path/to/jd.md
@@ -20,6 +20,9 @@ resume-tailor: ## RAG 简历定制 - deepseek（需 JD= 参数）
 
 resume-tailor-agnes: ## RAG 简历定制 - agnes（需 JD= 参数）
 	$(PY) tasks/resume-tailor/run.py --jd $(JD) --provider agnes $(if $(DOCS),--docs $(DOCS),)
+
+resume-tailor-rebuild: ## 强制重建 embedding 索引（需 JD= 参数）
+	$(PY) tasks/resume-tailor/run.py --jd $(JD) --rebuild $(if $(PROV),--provider $(PROV),) $(if $(DOCS),--docs $(DOCS),)
 
 help: ## 列出全部命令
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \

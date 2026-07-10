@@ -97,6 +97,8 @@ def main():
                     help="LLM 网关")
     ap.add_argument("--top-k", type=int, default=8,
                     help="RAG 检索 top-k 文档数（默认 8）")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="强制重建索引（忽略本地缓存）")
     args = ap.parse_args()
 
     # 读取 JD
@@ -136,26 +138,48 @@ def main():
     except RuntimeError as e:
         print(f"   ⚠️ {e}，将使用 LlamaIndex 默认 embedding")
 
-    # 构建 RAG index
-    print(f"📚 加载文档: {docs_dir}")
-    try:
-        from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
-        from llama_index.core.node_parser import SentenceSplitter
+    # 构建 RAG index（优先从本地持久化加载，避免重复 embedding）
+    index_dir = BASE / ".index_cache"
+    retriever = None
 
-        documents = SimpleDirectoryReader(docs_dir, recursive=True).load_data()
-        if not documents:
-            print("❌ 未加载到任何文档")
+    if not args.rebuild and index_dir.exists():
+        # 从磁盘加载已有索引
+        print(f"📚 从本地缓存加载索引: {index_dir}")
+        try:
+            from llama_index.core import VectorStoreIndex, StorageContext, load_index_from_storage
+
+            storage_context = StorageContext.from_defaults(persist_dir=str(index_dir))
+            index = load_index_from_storage(storage_context)
+            retriever = index.as_retriever(similarity_top_k=args.top_k)
+            print(f"   索引加载完成（缓存命中），retriever top_k={args.top_k}")
+        except Exception as e:
+            print(f"   ⚠️ 缓存加载失败: {e}，将重新构建")
+            retriever = None
+
+    if retriever is None:
+        print(f"📚 加载文档: {docs_dir}")
+        try:
+            from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+            from llama_index.core.node_parser import SentenceSplitter
+
+            documents = SimpleDirectoryReader(docs_dir, recursive=True).load_data()
+            if not documents:
+                print("❌ 未加载到任何文档")
+                sys.exit(1)
+            print(f"   加载了 {len(documents)} 个文档片段")
+
+            # 构建 index（使用已配置的 Settings.embed_model）
+            splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+            index = VectorStoreIndex.from_documents(documents, transformations=[splitter])
+            retriever = index.as_retriever(similarity_top_k=args.top_k)
+            print(f"   索引构建完成，retriever top_k={args.top_k}")
+
+            # 持久化到磁盘
+            index.storage_context.persist(persist_dir=str(index_dir))
+            print(f"   索引已缓存 → {index_dir}")
+        except Exception as e:
+            print(f"❌ 构建索引失败: {e}")
             sys.exit(1)
-        print(f"   加载了 {len(documents)} 个文档片段")
-
-        # 构建 index（使用已配置的 Settings.embed_model）
-        splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
-        index = VectorStoreIndex.from_documents(documents, transformations=[splitter])
-        retriever = index.as_retriever(similarity_top_k=args.top_k)
-        print(f"   索引构建完成，retriever top_k={args.top_k}")
-    except Exception as e:
-        print(f"❌ 构建索引失败: {e}")
-        sys.exit(1)
 
     # 构建 PSE workflow
     max_retries = settings.PSE_MAX_RETRIES or 3
