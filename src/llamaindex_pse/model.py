@@ -74,8 +74,8 @@ def create_embedding():
             base_url=base_url,
         )
 
-    # 默认: openai (OpenAI 兼容，含 DeepSeek)
-    from llama_index.embeddings.openai import OpenAIEmbedding
+    # 默认: openai (OpenAI 兼容，含 DeepSeek / 阿里 DashScope)
+    from llama_index.embeddings.openai import OpenAIEmbedding, OpenAIEmbeddingMode
 
     api_key = settings.EMBEDDING_API_KEY
     base_url = settings.EMBEDDING_BASE_URL
@@ -86,8 +86,11 @@ def create_embedding():
             "请在 .env 中配置。"
         )
 
+    # 非 OpenAI 官方模型（如 deepseek-embedding, text-embedding-v4）
+    # 不在 OpenAIEmbeddingModelType 枚举中，需指定 mode 绕过枚举校验
     return OpenAIEmbedding(
         model=model,
         api_key=api_key,
         api_base=base_url or None,
+        mode=OpenAIEmbeddingMode.TEXT_MODE,
     )
