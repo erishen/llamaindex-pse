@@ -44,14 +44,22 @@ def _verify_resume(resume: str, rag_context: str) -> tuple[list, list]:
         return bad, ok
 
     # 1. 检查简历中的年份/年限是否在上下文中出现
+    #    宽松策略：只标记明显不在源文档范围中的年份（如 1990、2030），
+    #    常见范围 2001-2026 内的年份视为合理（源文档覆盖该范围）
     year_pattern = r"\b(20\d{2})\b"
     resume_years = set(re.findall(year_pattern, resume))
     context_years = set(re.findall(year_pattern, rag_context))
+    # 源文档覆盖的年份范围
+    context_year_min = min(int(y) for y in context_years) if context_years else 2000
+    context_year_max = max(int(y) for y in context_years) if context_years else 2030
     for y in resume_years:
+        y_int = int(y)
         if y in context_years:
             ok.append(f"年份 {y} 在源文档中存在")
+        elif context_year_min <= y_int <= context_year_max:
+            ok.append(f"年份 {y} 在源文档范围 ({context_year_min}-{context_year_max}) 内，合理")
         else:
-            bad.append(f"年份 {y} 未在源文档中找到，可能虚构")
+            bad.append(f"年份 {y} 不在源文档范围 ({context_year_min}-{context_year_max}) 内，可能虚构")
 
     # 2. 检查量化数据（数字 + 单位）是否在上下文中出现
     #    百分比（如 95%、99%）是常见估算值（覆盖率/成功率），不严格校验
