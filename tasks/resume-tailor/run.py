@@ -18,6 +18,10 @@ import re
 import sys
 from pathlib import Path
 
+# LlamaIndex Workflow 内部创建 event loop，需要 nest_asyncio 允许嵌套
+import nest_asyncio
+nest_asyncio.apply()
+
 BASE = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE.parent.parent
 
