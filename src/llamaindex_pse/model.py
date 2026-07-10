@@ -7,6 +7,11 @@ LLM 支持两种 provider（均 OpenAI 兼容协议）：
 Embedding 支持两种 provider（由 EMBEDDING_PROVIDER 控制）：
   - "openai"（默认）：用 EMBEDDING_API_KEY / EMBEDDING_BASE_URL / EMBEDDING_MODEL
   - "ollama"：用 OLLAMA_BASE_URL / EMBEDDING_MODEL
+
+对于非 OpenAI 官方的 embedding 模型（如 deepseek-embedding、text-embedding-v4），
+LlamaIndex 的 OpenAIEmbedding 会因枚举校验报错。
+因此 OpenAI 兼容 embedding 直接基于 openai SDK 实现 CustomOpenAIEmbedding，
+彻底绕开 LlamaIndex 内部枚举问题。
 """
 
 from llama_index.llms.openai import OpenAI
@@ -47,22 +52,56 @@ def create_llm(provider: str = "deepseek") -> OpenAI:
     )
 
 
+class CustomOpenAIEmbedding:
+    """基于 openai SDK 的自定义 Embedding（绕开 LlamaIndex 枚举校验）。
+
+    实现 LlamaIndex 的 BaseEmbedding 接口，但直接调用 openai SDK，
+    不经过 OpenAIEmbeddingModelType 枚举校验。
+    适用于所有 OpenAI 兼容 API（DeepSeek、阿里 DashScope 等）。
+    """
+
+    def __init__(self, model: str, api_key: str, api_base: str):
+        import openai
+
+        self._model = model
+        self._client = openai.OpenAI(api_key=api_key, base_url=api_base)
+        self._async_client = openai.AsyncOpenAI(api_key=api_key, base_url=api_base)
+
+    def _get_text_embedding(self, text: str) -> list[float]:
+        resp = self._client.embeddings.create(input=text, model=self._model)
+        return resp.data[0].embedding
+
+    async def _aget_text_embedding(self, text: str) -> list[float]:
+        resp = await self._async_client.embeddings.create(input=text, model=self._model)
+        return resp.data[0].embedding
+
+    def _get_text_embeddings(self, texts: list[str]) -> list[list[float]]:
+        resp = self._client.embeddings.create(input=texts, model=self._model)
+        return [d.embedding for d in resp.data]
+
+    async def _aget_text_embeddings(self, texts: list[str]) -> list[list[float]]:
+        resp = await self._async_client.embeddings.create(input=texts, model=self._model)
+        return [d.embedding for d in resp.data]
+
+
 def create_embedding():
-    """创建 Embedding 模型（LlamaIndex 封装）。
+    """创建 Embedding 模型。
 
     根据 EMBEDDING_PROVIDER 选择后端：
-      - "openai"：OpenAIEmbedding，复用 OPENAI_API_KEY/BASE_URL（可单独覆盖）
+      - "openai"（默认）：CustomOpenAIEmbedding，直接用 openai SDK
       - "ollama"：OllamaEmbedding，用 OLLAMA_BASE_URL
 
-    EMBEDDING_MODEL 必填（如 deepseek-embedding, snowflake-arctic-embed2 等）。
+    EMBEDDING_MODEL 必填（如 deepseek-embedding, text-embedding-v4, snowflake-arctic-embed2 等）。
     """
+    from llama_index.core.embeddings import BaseEmbedding
+
     provider = settings.EMBEDDING_PROVIDER.lower()
     model = settings.EMBEDDING_MODEL
 
     if not model:
         raise RuntimeError(
             "未设置 EMBEDDING_MODEL。请在 .env 中补充"
-            "（如 deepseek-embedding, snowflake-arctic-embed2）。"
+            "（如 deepseek-embedding, text-embedding-v4）。"
         )
 
     if provider == "ollama":
@@ -74,14 +113,8 @@ def create_embedding():
             base_url=base_url,
         )
 
-    # 默认: openai (OpenAI 兼容，含 DeepSeek / 阿里 DashScope)
-    from llama_index.embeddings.openai import OpenAIEmbedding
-    from llama_index.embeddings.openai.base import (
-        OpenAIEmbeddingModelType,
-        OpenAIEmbeddingMode,
-        _QUERY_MODE_MODEL_DICT,
-    )
-
+    # 默认: openai 兼容（DeepSeek / 阿里 DashScope / OpenAI）
+    # 使用自定义实现，绕开 LlamaIndex OpenAIEmbedding 的枚举校验
     api_key = settings.EMBEDDING_API_KEY
     base_url = settings.EMBEDDING_BASE_URL
 
@@ -91,18 +124,34 @@ def create_embedding():
             "请在 .env 中配置。"
         )
 
-    # 非 OpenAI 官方模型（如 deepseek-embedding, text-embedding-v4）
-    # 不在 OpenAIEmbeddingModelType 枚举中，需注册到枚举映射表 + 查询模式字典
-    # 以绕过 LlamaIndex 内部校验，确保 API 调用时发送正确的模型名
-    if model not in OpenAIEmbeddingModelType._value2member_map_:
-        OpenAIEmbeddingModelType._value2member_map_[model] = (
-            OpenAIEmbeddingModelType.TEXT_EMBED_ADA_002
-        )
-        _QUERY_MODE_MODEL_DICT[(OpenAIEmbeddingMode.SIMILARITY_MODE, model)] = model
-        _QUERY_MODE_MODEL_DICT[(OpenAIEmbeddingMode.TEXT_SEARCH_MODE, model)] = model
-
-    return OpenAIEmbedding(
+    custom = CustomOpenAIEmbedding(
         model=model,
         api_key=api_key,
         api_base=base_url or None,
     )
+
+    # 包装为 LlamaIndex BaseEmbedding 兼容对象
+    class _EmbeddingWrapper(BaseEmbedding):
+        def __init__(self, custom_emb):
+            super().__init__(model_name=custom_emb._model)
+            self._custom = custom_emb
+
+        def _get_text_embedding(self, text: str) -> list[float]:
+            return self._custom._get_text_embedding(text)
+
+        async def _aget_text_embedding(self, text: str) -> list[float]:
+            return await self._custom._aget_text_embedding(text)
+
+        def _get_text_embeddings(self, texts: list[str]) -> list[list[float]]:
+            return self._custom._get_text_embeddings(texts)
+
+        async def _aget_text_embeddings(self, texts: list[str]) -> list[list[float]]:
+            return await self._custom._aget_text_embeddings(texts)
+
+        def _get_query_embedding(self, query: str) -> list[float]:
+            return self._custom._get_text_embedding(query)
+
+        async def _aget_query_embedding(self, query: str) -> list[float]:
+            return await self._custom._aget_text_embedding(query)
+
+    return _EmbeddingWrapper(custom)
