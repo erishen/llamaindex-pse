@@ -92,5 +92,5 @@ def create_embedding():
         model=model,
         api_key=api_key,
         api_base=base_url or None,
-        mode=OpenAIEmbeddingMode.TEXT_MODE,
+        mode=OpenAIEmbeddingMode.SIMILARITY_MODE,
     )
