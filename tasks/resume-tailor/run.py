@@ -73,8 +73,12 @@ def _verify_resume(resume: str, rag_context: str) -> tuple[list, list]:
 
 
 def _verify_state(state: dict) -> tuple[list, list]:
+    # 用 task_input（含完整简历全文）作为事实来源校验，RAG 上下文作补充
+    task_input = state.get("task_input", "")
     rag_context = state.get("task_data", {}).get("rag_context", "") or state.get("rag_context", "")
-    return _verify_resume(state.get("artifact", ""), rag_context)
+    # task_input 中的"我的完整简历"部分是最佳事实来源
+    source_context = task_input if len(task_input) > len(rag_context) else rag_context
+    return _verify_resume(state.get("artifact", ""), source_context)
 
 
 async def main():
@@ -110,11 +114,11 @@ async def main():
             jd_text = args.jd_text
 
     # 确定文档目录
-    docs_dir = args.docs
+    docs_dir = Path(args.docs) if args.docs else None
     if not docs_dir:
         pse_root = os.getenv("PSE_ROOT", str(Path.cwd()))
-        docs_dir = str(Path(pse_root) / "work" / "docs")
-    if not Path(docs_dir).exists():
+        docs_dir = Path(pse_root) / "work" / "docs"
+    if not docs_dir.exists():
         print(f"❌ 文档目录不存在: {docs_dir}")
         sys.exit(1)
 
@@ -161,7 +165,7 @@ async def main():
             from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
             from llama_index.core.node_parser import SentenceSplitter
 
-            documents = SimpleDirectoryReader(docs_dir, recursive=True).load_data()
+            documents = SimpleDirectoryReader(str(docs_dir), recursive=True).load_data()
             if not documents:
                 print("❌ 未加载到任何文档")
                 sys.exit(1)
@@ -204,12 +208,20 @@ async def main():
         workflow._specialist_prompt = specialist_prompt
         workflow._evaluator_prompt = evaluator_prompt
 
-        # 推荐模式：多维度检索，覆盖技能/经历/项目
+        # 推荐模式：直接注入核心简历全文 + RAG 补充行情/面试信息
+        resume_src = docs_dir / "resume2026ppcnlean-v2" / "ai-engineering.md"
+        resume_full = ""
+        if resume_src.exists():
+            resume_full = resume_src.read_text(encoding="utf-8")
+            print(f"   📄 核心简历已加载: {resume_src.name} ({len(resume_full)} 字)")
+
         task_input = (
             "请分析我的职业背景，结合当前国内招聘市场行情，"
             "推荐最适合我的岗位方向，并为排名第一的岗位定制简历。\n\n"
-            "检索关键词：技术栈、项目经验、工作经历、架构设计、AI 工程化、团队管理"
         )
+        if resume_full:
+            task_input += f"## 我的完整简历（以下为事实来源，必须基于此撰写）\n\n{resume_full}\n\n"
+        task_input += "## 补充检索\n检索关键词：国内 2025-2026 招聘行情、AI 工程化岗位需求、全栈工程师薪资、前端+AI 复合岗位"
 
         print(f"\n🚀 自由推荐模式 (provider={args.provider}, max_retries={max_retries})")
         handler = workflow.run(
@@ -236,9 +248,16 @@ async def main():
             rag_top_k=args.top_k,
         )
 
-        task_input = (
-            f"请根据以下 JD 定制简历：\n\n## 岗位描述\n{jd_text}"
-        )
+        # 注入核心简历全文
+        resume_src = docs_dir / "resume2026ppcnlean-v2" / "ai-engineering.md"
+        resume_full = ""
+        if resume_src.exists():
+            resume_full = resume_src.read_text(encoding="utf-8")
+            print(f"   📄 核心简历已加载: {resume_src.name} ({len(resume_full)} 字)")
+
+        task_input = f"请根据以下 JD 定制简历：\n\n## 岗位描述\n{jd_text}\n\n"
+        if resume_full:
+            task_input += f"## 我的完整简历（以下为事实来源，必须基于此撰写）\n\n{resume_full}\n\n"
 
         print(f"\n🚀 JD 定制模式 (provider={args.provider}, max_retries={max_retries})")
         handler = workflow.run(

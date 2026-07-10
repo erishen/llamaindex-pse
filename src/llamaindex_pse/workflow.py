@@ -81,8 +81,13 @@ class FixEvent(Event):
 # ─────────────────────── RAG 辅助 ───────────────────────
 
 async def _retrieve_context(retriever, query: str, top_k: int = 5) -> str:
-    """用 LlamaIndex retriever 检索相关文档，拼接为上下文字符串。"""
-    nodes = retriever.retrieve(query)
+    """用 LlamaIndex retriever 检索相关文档，拼接为上下文字符串。
+
+    query 过长时会超出 embedding 模型上下文长度，因此截取前 200 字作为检索关键词。
+    """
+    # 截取短查询：embedding 模型上下文有限（如 Ollama snowflake-arctic-embed2 仅 8K tokens）
+    short_query = query[:200] if len(query) > 200 else query
+    nodes = retriever.retrieve(short_query)
     if not nodes:
         return ""
     # 取 top_k 个节点，按 score 降序
