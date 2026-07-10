@@ -1,10 +1,12 @@
-"""LLM / Embedding 客户端 — LlamaIndex OpenAI 兼容。
+"""LLM / Embedding 客户端 — LlamaIndex OpenAI 兼容 + Ollama。
 
 LLM 支持两种 provider（均 OpenAI 兼容协议）：
   - "deepseek"（默认）：用 OPENAI_* 变量
   - "agnes"：用 AGNES_* 变量
 
-Embedding 复用 OPENAI 兼容协议，由 EMBEDDING_* 变量控制。
+Embedding 支持两种 provider（由 EMBEDDING_PROVIDER 控制）：
+  - "openai"（默认）：用 EMBEDDING_API_KEY / EMBEDDING_BASE_URL / EMBEDDING_MODEL
+  - "ollama"：用 OLLAMA_BASE_URL / EMBEDDING_MODEL
 """
 
 from llama_index.llms.openai import OpenAI
@@ -46,26 +48,42 @@ def create_llm(provider: str = "deepseek") -> OpenAI:
 
 
 def create_embedding():
-    """创建 OpenAI 兼容 Embedding 模型（LlamaIndex 封装）。
+    """创建 Embedding 模型（LlamaIndex 封装）。
 
-    默认复用 OPENAI_API_KEY / OPENAI_BASE_URL，也可通过
-    EMBEDDING_API_KEY / EMBEDDING_BASE_URL 单独配置。
-    EMBEDDING_MODEL 必填（如 deepseek-embedding, text-embedding-3-small 等）。
+    根据 EMBEDDING_PROVIDER 选择后端：
+      - "openai"：OpenAIEmbedding，复用 OPENAI_API_KEY/BASE_URL（可单独覆盖）
+      - "ollama"：OllamaEmbedding，用 OLLAMA_BASE_URL
+
+    EMBEDDING_MODEL 必填（如 deepseek-embedding, snowflake-arctic-embed2 等）。
     """
+    provider = settings.EMBEDDING_PROVIDER.lower()
+    model = settings.EMBEDDING_MODEL
+
+    if not model:
+        raise RuntimeError(
+            "未设置 EMBEDDING_MODEL。请在 .env 中补充"
+            "（如 deepseek-embedding, snowflake-arctic-embed2）。"
+        )
+
+    if provider == "ollama":
+        from llama_index.embeddings.ollama import OllamaEmbedding
+
+        base_url = settings.OLLAMA_BASE_URL
+        return OllamaEmbedding(
+            model_name=model,
+            base_url=base_url,
+        )
+
+    # 默认: openai (OpenAI 兼容，含 DeepSeek)
     from llama_index.embeddings.openai import OpenAIEmbedding
 
     api_key = settings.EMBEDDING_API_KEY
     base_url = settings.EMBEDDING_BASE_URL
-    model = settings.EMBEDDING_MODEL
 
     if not api_key:
         raise RuntimeError(
             "未设置 EMBEDDING_API_KEY（也不存在 OPENAI_API_KEY 兜底）。"
             "请在 .env 中配置。"
-        )
-    if not model:
-        raise RuntimeError(
-            "未设置 EMBEDDING_MODEL。请在 .env 中补充（如 deepseek-embedding）。"
         )
 
     return OpenAIEmbedding(

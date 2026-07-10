@@ -131,9 +131,10 @@ def main():
     Settings.llm = create_llm(args.provider)
     try:
         Settings.embed_model = create_embedding()
-        print(f"   Embedding: {settings.EMBEDDING_MODEL}")
-    except RuntimeError:
-        print("   ⚠️ 未配置 EMBEDDING_MODEL，将使用 LlamaIndex 默认 embedding")
+        embed_info = f"{settings.EMBEDDING_PROVIDER}/{settings.EMBEDDING_MODEL}"
+        print(f"   Embedding: {embed_info}")
+    except RuntimeError as e:
+        print(f"   ⚠️ {e}，将使用 LlamaIndex 默认 embedding")
 
     # 构建 RAG index
     print(f"📚 加载文档: {docs_dir}")
