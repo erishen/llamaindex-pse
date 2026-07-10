@@ -143,7 +143,7 @@ class PSEWorkflow(Workflow):
             task_data=ev.get("task_data", {}),
             max_retries=ev.get("max_retries", self._max_retries),
         )
-        await ctx.set("state", state)
+        await ctx.store.set("state", state)
 
         if self._use_planner:
             return PlannerEvent(task_input=state.task_input)
@@ -152,8 +152,6 @@ class PSEWorkflow(Workflow):
     @step
     async def planner(self, ctx: Context, ev: PlannerEvent) -> SpecialistEvent:
         """Planner：RAG 检索 + 读取上下文 → 产出执行规划。"""
-        from llama_index.core.agent import FunctionCallingAgent
-
         # RAG 增强：检索与任务相关的文档
         rag_ctx = ""
         if self._retriever:
@@ -165,63 +163,55 @@ class PSEWorkflow(Workflow):
         if rag_ctx:
             full_input += f"\n\n## 检索到的参考文档\n{rag_ctx}"
 
-        agent = FunctionCallingAgent.from_tools(
-            self._tools,
-            llm=self._llm,
-            system_prompt=self._planner_prompt or None,
-            verbose=False,
-        )
-        response = agent.chat(full_input)
-        plan = str(response)
+        messages = []
+        if self._planner_prompt:
+            messages.append({"role": "system", "content": self._planner_prompt})
+        messages.append({"role": "user", "content": full_input})
+        plan = self._llm.chat(messages)
         print(f"✅ 规划已完成 ({len(plan)} 字)")
 
-        state: PSEState = await ctx.get("state")
+        state: PSEState = await ctx.store.get("state")
         state.plan = plan
         state.rag_context = rag_ctx
-        await ctx.set("state", state)
+        await ctx.store.set("state", state)
 
         return SpecialistEvent(task_input=ev.task_input, plan=plan)
 
     @step
     async def specialist(self, ctx: Context, ev: SpecialistEvent) -> EvaluatorEvent:
         """Specialist：RAG 检索 + 把规划展开为最终产物。"""
-        from llama_index.core.agent import FunctionCallingAgent
-
         full = (ev.task_input + "\n\n## 执行规划\n" + ev.plan) if ev.plan else ev.task_input
 
         # RAG 增强：如果 planner 没跑（use_planner=False），这里补检索
-        state: PSEState = await ctx.get("state")
+        state: PSEState = await ctx.store.get("state")
         rag_ctx = state.rag_context
         if not rag_ctx and self._retriever:
             rag_ctx = await _retrieve_context(self._retriever, ev.task_input, self._rag_top_k)
             if rag_ctx:
                 print(f"  📚 RAG 检索到 {len(rag_ctx)} 字上下文")
                 state.rag_context = rag_ctx
-                await ctx.set("state", state)
+                await ctx.store.set("state", state)
 
         if rag_ctx:
             full += f"\n\n## 检索到的参考文档（产物必须基于此，禁止编造）\n{rag_ctx}"
 
-        agent = FunctionCallingAgent.from_tools(
-            self._tools,
-            llm=self._llm,
-            system_prompt=self._specialist_prompt or None,
-            verbose=False,
-        )
-        response = agent.chat(full)
-        artifact = str(response)
+        messages = []
+        if self._specialist_prompt:
+            messages.append({"role": "system", "content": self._specialist_prompt})
+        messages.append({"role": "user", "content": full})
+        artifact = self._llm.chat(messages)
         if not artifact:
             raise RuntimeError("Specialist 未输出任何内容")
 
         state.artifact = artifact
-        await ctx.set("state", state)
+        await ctx.store.set("state", state)
 
         return EvaluatorEvent(artifact=artifact, attempts=state.attempts)
 
     @step
     async def evaluator(self, ctx: Context, ev: EvaluatorEvent) -> FixEvent | StopEvent:
         """Evaluator（合并闸门）：LLM 评审(仅首轮) + 程序化 verify_fn 硬核查(每轮)。"""
-        state: PSEState = await ctx.get("state")
+        state: PSEState = await ctx.store.get("state")
 
         # 1) LLM 评审（仅首轮）
         eval_issues: list = []
@@ -259,6 +249,7 @@ class PSEWorkflow(Workflow):
                 "verified": state.verified,
                 "eval_issues": state.eval_issues,
                 "max_retries": state.max_retries,
+                "rag_context": state.rag_context,
             }
             prog_bad, ok = self._verify_fn(state_dict)
         else:
@@ -269,7 +260,7 @@ class PSEWorkflow(Workflow):
         state.fictitious = all_bad
         state.verified = ok
         state.eval_issues = eval_issues
-        await ctx.set("state", state)
+        await ctx.store.set("state", state)
 
         print(f"\n{'=' * 60}")
         print(f"  核查 (第{state.attempts}次) — 程序化通过 {len(ok)} 项, "
@@ -290,7 +281,7 @@ class PSEWorkflow(Workflow):
     @step
     async def fix(self, ctx: Context, ev: FixEvent) -> EvaluatorEvent:
         """Fix：按核查出的问题修正产物。RAG 上下文注入修正提示，防止凭空编造。"""
-        state: PSEState = await ctx.get("state")
+        state: PSEState = await ctx.store.get("state")
         scan = state.task_data.get("scan_result", {})
         scan_str = json.dumps(scan, ensure_ascii=False, indent=2)
 
@@ -321,7 +312,7 @@ class PSEWorkflow(Workflow):
 
         state.artifact = fixed
         state.eval_issues = []
-        await ctx.set("state", state)
+        await ctx.store.set("state", state)
 
         return EvaluatorEvent(artifact=fixed, attempts=state.attempts)
 

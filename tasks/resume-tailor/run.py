@@ -73,7 +73,7 @@ def _verify_resume(resume: str, rag_context: str) -> tuple[list, list]:
 
 
 def _verify_state(state: dict) -> tuple[list, list]:
-    rag_context = state.get("task_data", {}).get("rag_context", "")
+    rag_context = state.get("task_data", {}).get("rag_context", "") or state.get("rag_context", "")
     return _verify_resume(state.get("artifact", ""), rag_context)
 
 
@@ -127,10 +127,11 @@ async def main():
         print(f"❌ 无法加载 llamaindex 运行环境: {e}\n（请先 `uv sync`）")
         sys.exit(1)
 
-    # 配置全局 LLM + Embedding
-    from llama_index.core import Settings
-    Settings.llm = create_llm(args.provider)
+    # 配置 LLM + Embedding
+    llm = create_llm(args.provider)
+    print(f"   LLM: {llm.model_name}")
     try:
+        from llama_index.core import Settings
         Settings.embed_model = create_embedding()
         embed_info = f"{settings.EMBEDDING_PROVIDER}/{settings.EMBEDDING_MODEL}"
         print(f"   Embedding: {embed_info}")
@@ -189,6 +190,7 @@ async def main():
         evaluator_prompt = (prompts_dir / "evaluator.md").read_text(encoding="utf-8")
 
         workflow = build_workflow(
+            llm=llm,
             task="resume-tailor",
             verify_fn=_verify_state,
             use_planner=True,
@@ -224,6 +226,7 @@ async def main():
     else:
         # ── JD 定制模式 ──
         workflow = build_workflow(
+            llm=llm,
             task="resume-tailor",
             verify_fn=_verify_state,
             use_planner=True,

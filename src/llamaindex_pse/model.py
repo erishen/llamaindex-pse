@@ -1,26 +1,57 @@
-"""LLM / Embedding 客户端 — LlamaIndex OpenAI 兼容 + Ollama。
+"""LLM / Embedding 客户端 — 直接用 openai SDK 绕开 LlamaIndex 枚举校验。
 
 LLM 支持两种 provider（均 OpenAI 兼容协议）：
   - "deepseek"（默认）：用 OPENAI_* 变量
   - "agnes"：用 AGNES_* 变量
 
-Embedding 支持两种 provider（由 EMBEDDING_PROVIDER 控制）：
-  - "openai"（默认）：用 EMBEDDING_API_KEY / EMBEDDING_BASE_URL / EMBEDDING_MODEL
-  - "ollama"：用 OLLAMA_BASE_URL / EMBEDDING_MODEL
+LlamaIndex 的 OpenAI LLM 封装在 metadata 属性中调用
+openai_modelname_to_contextsize()，对非 OpenAI 官方模型（deepseek-chat、
+agnes-2.0-flash）会报 ValueError。因此直接用 openai SDK 实现 chat/complete，
+完全绕开 LlamaIndex 的 OpenAI 封装。
 
-对于非 OpenAI 官方的 embedding 模型（如 deepseek-embedding、text-embedding-v4），
-LlamaIndex 的 OpenAIEmbedding 会因枚举校验报错。
-因此 OpenAI 兼容 embedding 直接基于 openai SDK 实现 CustomOpenAIEmbedding，
-彻底绕开 LlamaIndex 内部枚举问题。
+Embedding 同理：CustomOpenAIEmbedding 基于 openai SDK 实现。
 """
 
-from llama_index.llms.openai import OpenAI
+import openai
 
 from .config import settings
 
 
-def create_llm(provider: str = "deepseek") -> OpenAI:
-    """创建 OpenAI 兼容 LLM（LlamaIndex 封装）。
+class SimpleLLM:
+    """基于 openai SDK 的轻量 LLM（绕开 LlamaIndex OpenAI 校验）。
+
+    仅提供 PSE workflow 需要的 chat() 和 complete() 接口。
+    """
+
+    def __init__(self, model: str, api_key: str, base_url: str):
+        self._model = model
+        self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
+
+    def chat(self, messages: list[dict]) -> str:
+        """Chat completion，返回 assistant 内容。"""
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            timeout=180,
+        )
+        return resp.choices[0].message.content or ""
+
+    def complete(self, prompt: str) -> str:
+        """Text completion（内部转 chat）。"""
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=180,
+        )
+        return resp.choices[0].message.content or ""
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+
+def create_llm(provider: str = "deepseek") -> SimpleLLM:
+    """创建 OpenAI 兼容 LLM。
 
     provider: "deepseek" | "agnes"
     """
@@ -43,12 +74,10 @@ def create_llm(provider: str = "deepseek") -> OpenAI:
         raise RuntimeError(
             f"未设置 {label}_MODEL。请在 .env 中补充模型名（例如 AGNES_MODEL）。"
         )
-    return OpenAI(
+    return SimpleLLM(
         model=model,
         api_key=api_key,
-        api_base=base_url or None,
-        timeout=180,
-        max_retries=settings.PSE_MAX_RETRIES or 6,
+        base_url=base_url or None,
     )
 
 
@@ -61,8 +90,6 @@ class CustomOpenAIEmbedding:
     """
 
     def __init__(self, model: str, api_key: str, api_base: str):
-        import openai
-
         self._model = model
         self._client = openai.OpenAI(api_key=api_key, base_url=api_base)
         self._async_client = openai.AsyncOpenAI(api_key=api_key, base_url=api_base)
