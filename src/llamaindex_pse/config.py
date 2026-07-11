@@ -27,5 +27,28 @@ class Settings:
     # Ollama Embedding（EMBEDDING_PROVIDER=ollama 时使用）
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
+    # ── 简历任务个人配置（从 .env 注入，避免硬编码入库）──
+    # 公司任职期间：JSON 格式 {"公司": "入职~离职"}（用 ~ 分隔入职/离职）
+    RESUME_COMPANY_PERIODS: str = os.getenv("RESUME_COMPANY_PERIODS", "{}")
+    # 必须有项目覆盖的公司：逗号分隔
+    RESUME_REQUIRED_COMPANIES: str = os.getenv("RESUME_REQUIRED_COMPANIES", "")
+    # 核心简历文件名（在 resume2026ppcnlean-v2/ 目录下）
+    RESUME_SOURCE_FILE: str = os.getenv("RESUME_SOURCE_FILE", "ai-engineering.md")
+    # 当前/最近公司离职时间（用于替换"至今"）
+    RESUME_LATEST_COMPANY_END: str = os.getenv("RESUME_LATEST_COMPANY_END", "")
+    # 当前/最近公司名及入职时间（用于后处理"至今"替换）
+    RESUME_LATEST_COMPANY: str = os.getenv("RESUME_LATEST_COMPANY", "")
+    RESUME_LATEST_COMPANY_START: str = os.getenv("RESUME_LATEST_COMPANY_START", "")
+    # 项目影响力关键词：JSON [["pattern", score], ...]
+    RESUME_IMPACT_KEYWORDS: str = os.getenv("RESUME_IMPACT_KEYWORDS", "")
+    # 求职意向默认值（后处理自动填充用）
+    RESUME_DEFAULT_POSITION: str = os.getenv("RESUME_DEFAULT_POSITION", "")
+    RESUME_DEFAULT_LOCATION: str = os.getenv("RESUME_DEFAULT_LOCATION", "")
+    RESUME_DEFAULT_DIRECTION: str = os.getenv("RESUME_DEFAULT_DIRECTION", "")
+    # RAG 检索关键词（Planner 市场情报检索用）
+    RESUME_RAG_KEYWORDS: str = os.getenv("RESUME_RAG_KEYWORDS", "")
+    # 禁止出现的年限表述（正则，用 | 分隔多个模式）
+    RESUME_BANNED_YEARS: str = os.getenv("RESUME_BANNED_YEARS", "")
+
 
 settings = Settings()

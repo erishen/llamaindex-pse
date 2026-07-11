@@ -122,6 +122,7 @@ class PSEWorkflow(Workflow):
         use_planner: bool = True,
         provider: str = "deepseek",
         retriever=None,
+        planner_retriever=None,
         rag_top_k: int = 5,
         **kwargs,
     ):
@@ -133,7 +134,8 @@ class PSEWorkflow(Workflow):
         self._max_retries = max_retries
         self._use_planner = use_planner
         self._provider = provider
-        self._retriever = retriever
+        self._retriever = retriever  # specialist 用的 retriever（简历源数据）
+        self._planner_retriever = planner_retriever  # planner 用的 retriever（市场/JD 情报）
         self._rag_top_k = rag_top_k
 
         self._planner_prompt = load_prompt("planner", task) if use_planner else ""
@@ -156,13 +158,15 @@ class PSEWorkflow(Workflow):
 
     @step
     async def planner(self, ctx: Context, ev: PlannerEvent) -> SpecialistEvent:
-        """Planner：RAG 检索 + 读取上下文 → 产出执行规划。"""
-        # RAG 增强：检索与任务相关的文档
+        """Planner：RAG 检索市场/JD 情报 + 读取上下文 → 产出执行规划。"""
+        # RAG 增强：优先用 planner_retriever（市场/JD 情报），fallback 到通用 retriever
         rag_ctx = ""
-        if self._retriever:
-            rag_ctx = await _retrieve_context(self._retriever, ev.task_input, self._rag_top_k)
+        pr = self._planner_retriever or self._retriever
+        if pr:
+            rag_ctx = await _retrieve_context(pr, ev.task_input, self._rag_top_k)
             if rag_ctx:
-                print(f"  📚 RAG 检索到 {len(rag_ctx)} 字上下文")
+                label = "市场情报" if self._planner_retriever else "参考文档"
+                print(f"  📚 RAG 检索{label} {len(rag_ctx)} 字")
 
         full_input = ev.task_input
         if rag_ctx:
@@ -172,7 +176,7 @@ class PSEWorkflow(Workflow):
         if self._planner_prompt:
             messages.append({"role": "system", "content": self._planner_prompt})
         messages.append({"role": "user", "content": full_input})
-        plan = self._llm.chat(messages)
+        plan = self._llm.chat(messages, stage="planner")
         print(f"✅ 规划已完成 ({len(plan)} 字)")
 
         state: PSEState = await ctx.store.get("state")
@@ -184,16 +188,16 @@ class PSEWorkflow(Workflow):
 
     @step
     async def specialist(self, ctx: Context, ev: SpecialistEvent) -> EvaluatorEvent:
-        """Specialist：RAG 检索 + 把规划展开为最终产物。"""
+        """Specialist：RAG 检索简历源数据 + 把规划展开为最终产物。"""
         full = (ev.task_input + "\n\n## 执行规划\n" + ev.plan) if ev.plan else ev.task_input
 
-        # RAG 增强：如果 planner 没跑（use_planner=False），这里补检索
+        # RAG 增强：specialist 用 retriever（简历源数据），如 planner 已检索则复用
         state: PSEState = await ctx.store.get("state")
         rag_ctx = state.rag_context
         if not rag_ctx and self._retriever:
             rag_ctx = await _retrieve_context(self._retriever, ev.task_input, self._rag_top_k)
             if rag_ctx:
-                print(f"  📚 RAG 检索到 {len(rag_ctx)} 字上下文")
+                print(f"  📚 RAG 检索简历源数据 {len(rag_ctx)} 字")
                 state.rag_context = rag_ctx
                 await ctx.store.set("state", state)
 
@@ -204,7 +208,7 @@ class PSEWorkflow(Workflow):
         if self._specialist_prompt:
             messages.append({"role": "system", "content": self._specialist_prompt})
         messages.append({"role": "user", "content": full})
-        artifact = self._llm.chat(messages)
+        artifact = self._llm.chat(messages, stage="specialist")
         if not artifact:
             raise RuntimeError("Specialist 未输出任何内容")
 
@@ -235,7 +239,8 @@ class PSEWorkflow(Workflow):
                 f"{rag_section}"
             )
             resp = self._llm.complete(
-                self._evaluator_prompt + "\n\n" + full
+                self._evaluator_prompt + "\n\n" + full,
+                stage="evaluator",
             )
             text = str(resp)
             eval_issues = _parse_eval_issues(text)
@@ -311,10 +316,13 @@ class PSEWorkflow(Workflow):
             "2. 不要删除任何正确的数字或内容，保持其余部分不变\n"
             "3. **绝对禁止删除整段工作经历或项目经历**——如果某段经历的数据有误，修正数据而非删除整段\n"
             "4. **绝对禁止将经历替换为占位符或注释**（如'注：源文档未提供'）——应基于真实数据修正\n"
-            "5. 输出修正后的完整产物，不输出解释\n\n"
+            "5. 如果问题清单提到'20年'等年限表述：**直接删除**该年限表述，不要替换为其他年份数字\n"
+            "6. 如果问题清单提到项目缺少起止时间：在项目标题的公司名后追加`| YYYY.MM-YYYY.MM`格式的时间范围，"
+            "时间从该公司的任职期间推断\n"
+            "7. 输出修正后的完整产物，不输出解释\n\n"
             f"## 当前产物\n{ev.artifact}"
         )
-        resp = self._llm.complete(prompt)
+        resp = self._llm.complete(prompt, stage="fix")
         fixed = str(resp)
 
         state.artifact = fixed
@@ -347,19 +355,20 @@ def build_workflow(
     use_planner: bool = True,
     provider: str = "deepseek",
     retriever=None,
+    planner_retriever=None,
     rag_top_k: int = 5,
 ) -> PSEWorkflow:
     """构建通用 PSE Workflow。
 
-    llm:         LlamaIndex LLM（缺省按 provider 创建）。
-    task:        任务名，用于加载 tasks/<task>/prompts/{planner,specialist,evaluator}.md。
-    tools:       注入 agent 的工具列表（默认 read_file + run_bash）。
-    verify_fn:   程序化核查函数，签名 (state) -> (bad: list, ok: list)；不传则默认通过。
-    use_planner: 是否包含 planner 节点（无规划需求的任务可关掉，从 specialist 起步）。
-    provider:    "deepseek" | "agnes"，决定 LLM 网关。
-    retriever:   LlamaIndex Retriever（可选）。传入后 planner/specialist 自动 RAG 增强：
-                 检索与任务相关的文档，产物从源头 grounded，减少幻觉。
-    rag_top_k:   RAG 检索返回的最大文档数（默认 5）。
+    llm:              LlamaIndex LLM（缺省按 provider 创建）。
+    task:             任务名，用于加载 tasks/<task>/prompts/{planner,specialist,evaluator}.md。
+    tools:            注入 agent 的工具列表（默认 read_file + run_bash）。
+    verify_fn:        程序化核查函数，签名 (state) -> (bad: list, ok: list)；不传则默认通过。
+    use_planner:      是否包含 planner 节点（无规划需求的任务可关掉，从 specialist 起步）。
+    provider:         "deepseek" | "agnes"，决定 LLM 网关。
+    retriever:        Specialist 用的 Retriever（简历源数据）。
+    planner_retriever: Planner 用的 Retriever（市场/JD 情报）。不传则 fallback 到 retriever。
+    rag_top_k:        RAG 检索返回的最大文档数（默认 5）。
     返回 PSEWorkflow 实例，用 await workflow.run(task_input=..., task_data=..., max_retries=...) 调用。
     """
     return PSEWorkflow(
@@ -371,5 +380,6 @@ def build_workflow(
         use_planner=use_planner,
         provider=provider,
         retriever=retriever,
+        planner_retriever=planner_retriever,
         rag_top_k=rag_top_k,
     )

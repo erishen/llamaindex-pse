@@ -8,5 +8,8 @@ outputs/
 tailored_resume.md
 recommended_resume.md
 
+# 含个人隐私的 prompt 文件（公司名/项目时间/GitHub 等）
+tasks/*/prompts/recommend_specialist.md
+
 # Embedding 索引缓存（可本地重建，不入库）
 .index_cache/

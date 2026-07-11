@@ -12,37 +12,143 @@ agnes-2.0-flash）会报 ValueError。因此直接用 openai SDK 实现 chat/com
 Embedding 同理：CustomOpenAIEmbedding 基于 openai SDK 实现。
 """
 
+import time
+
 import openai
 
 from .config import settings
+
+
+class TokenStats:
+    """Token 消耗统计收集器，含价格计算。"""
+
+    # 模型定价表：元 / 百万 tokens（人民币）
+    PRICING = {
+        "deepseek-chat": {"input": 1.0, "output": 2.0},       # DeepSeek V3 官方价
+        "deepseek-reasoner": {"input": 4.0, "output": 16.0},  # DeepSeek R1
+        "agnes-2.0-flash": {"input": 0.5, "output": 1.5},     # Agnes 网关（估算）
+    }
+
+    def __init__(self):
+        self.calls: list[dict] = []
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        self.total_tokens = 0
+        self.total_cost_cny = 0.0
+
+    def record(self, stage: str, prompt_tokens: int, completion_tokens: int, model: str):
+        total = prompt_tokens + completion_tokens
+        # 计算费用
+        pricing = self.PRICING.get(model, {"input": 0, "output": 0})
+        cost = (prompt_tokens * pricing["input"] + completion_tokens * pricing["output"]) / 1_000_000
+        self.calls.append({
+            "stage": stage,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total,
+            "model": model,
+            "cost_cny": cost,
+        })
+        self.total_prompt_tokens += prompt_tokens
+        self.total_completion_tokens += completion_tokens
+        self.total_tokens += total
+        self.total_cost_cny += cost
+
+    def summary(self) -> str:
+        if not self.calls:
+            return "无 LLM 调用"
+        has_pricing = any(c["cost_cny"] > 0 for c in self.calls)
+        lines = [
+            f"📊 Token 消耗统计（{len(self.calls)} 次调用）",
+            f"   {'阶段':<12} {'输入':>8} {'输出':>8} {'合计':>8}" + (f" {'费用(¥)':>10}" if has_pricing else ""),
+            f"   {'─'*12} {'─'*8} {'─'*8} {'─'*8}" + (f" {'─'*10}" if has_pricing else ""),
+        ]
+        for c in self.calls:
+            row = f"   {c['stage']:<12} {c['prompt_tokens']:>8} {c['completion_tokens']:>8} {c['total_tokens']:>8}"
+            if has_pricing:
+                row += f" {c['cost_cny']:>10.4f}"
+            lines.append(row)
+        lines.append(
+            f"   {'─'*12} {'─'*8} {'─'*8} {'─'*8}" + (f" {'─'*10}" if has_pricing else "")
+        )
+        total_row = f"   {'合计':<12} {self.total_prompt_tokens:>8} {self.total_completion_tokens:>8} {self.total_tokens:>8}"
+        if has_pricing:
+            total_row += f" {self.total_cost_cny:>10.4f}"
+        lines.append(total_row)
+        if has_pricing:
+            lines.append(f"   💰 总费用: ¥{self.total_cost_cny:.4f}")
+        return "\n".join(lines)
+
+    def as_dict(self) -> dict:
+        return {
+            "calls": self.calls,
+            "total_prompt_tokens": self.total_prompt_tokens,
+            "total_completion_tokens": self.total_completion_tokens,
+            "total_tokens": self.total_tokens,
+            "total_cost_cny": self.total_cost_cny,
+        }
+
+
+# 全局 token 统计实例
+token_stats = TokenStats()
 
 
 class SimpleLLM:
     """基于 openai SDK 的轻量 LLM（绕开 LlamaIndex OpenAI 校验）。
 
     仅提供 PSE workflow 需要的 chat() 和 complete() 接口。
+    内置连接重试（最多 3 次，间隔 5 秒），应对网关偶发断连。
+    自动记录 token 消耗到全局 token_stats。
     """
 
     def __init__(self, model: str, api_key: str, base_url: str):
         self._model = model
         self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
 
-    def chat(self, messages: list[dict]) -> str:
+    def _call_with_retry(self, fn, max_retries=3, delay=5):
+        """带重试的 API 调用，应对网关偶发断连。"""
+        for attempt in range(max_retries):
+            try:
+                return fn()
+            except openai.APIConnectionError as e:
+                if attempt < max_retries - 1:
+                    print(f"  ⚠️ 连接失败 ({attempt+1}/{max_retries})，{delay}s 后重试...")
+                    time.sleep(delay)
+                else:
+                    raise
+
+    def chat(self, messages: list[dict], stage: str = "chat") -> str:
         """Chat completion，返回 assistant 内容。"""
-        resp = self._client.chat.completions.create(
+        resp = self._call_with_retry(lambda: self._client.chat.completions.create(
             model=self._model,
             messages=messages,
             timeout=180,
-        )
+        ))
+        # 记录 token 消耗
+        if resp.usage:
+            token_stats.record(
+                stage=stage,
+                prompt_tokens=resp.usage.prompt_tokens or 0,
+                completion_tokens=resp.usage.completion_tokens or 0,
+                model=self._model,
+            )
         return resp.choices[0].message.content or ""
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, stage: str = "complete") -> str:
         """Text completion（内部转 chat）。"""
-        resp = self._client.chat.completions.create(
+        resp = self._call_with_retry(lambda: self._client.chat.completions.create(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
             timeout=180,
-        )
+        ))
+        # 记录 token 消耗
+        if resp.usage:
+            token_stats.record(
+                stage=stage,
+                prompt_tokens=resp.usage.prompt_tokens or 0,
+                completion_tokens=resp.usage.completion_tokens or 0,
+                model=self._model,
+            )
         return resp.choices[0].message.content or ""
 
     @property
