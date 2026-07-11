@@ -18,7 +18,7 @@ START → [planner] → specialist → evaluator ─┬─(通过)─▶ END
                                           └─(有问题)─▶ fix → evaluator（循环，最多 N 轮）
 ```
 
-1. **Planner（可选）** — RAG 检索相关文档，`FunctionCallingAgent` 基于真实上下文产出执行规划。
+1. **Planner（可选）** — RAG 检索相关文档，再由 LLM（自研 OpenAI 兼容客户端，见 `model.py`）基于真实上下文产出执行规划。
 2. **Specialist** — RAG 检索（Planner 没跑时补检索），把规划展开为最终产物。产物*源头 grounded*——幻觉概率大幅降低。
 3. **Evaluator（合并闸门）** — 每轮都跑，融合两道核查：
    - **程序化验证**：由任务注入的 `verify_fn(state) -> (bad, ok)` 做确定性检查。刻意**不做** LLM 裁判——确定性验证比让模型评判自己输出可靠得多。
@@ -33,7 +33,7 @@ START → [planner] → specialist → evaluator ─┬─(通过)─▶ END
 |---|---|---|
 | 编排 | `StateGraph` + 条件边 | `Workflow` + `@step` + Event |
 | 重试循环 | `add_conditional_edges("evaluator", should_fix)` | Evaluator 返回 `FixEvent` 或 `StopEvent` |
-| 工具调用 | LangGraph `create_agent`（LangChain tools） | LlamaIndex `FunctionCallingAgent`（FunctionTool） |
+| 工具调用 | LangGraph `create_agent`（LangChain tools） | LlamaIndex `FunctionTool`（沙箱版 `read_file` / `run_bash`） |
 | 状态 | `TypedDict` 在图边上传递 | `dataclass` 通过 `Context` 传递 |
 | RAG | — | **内置**：`retriever` 参数，Planner/Specialist/Fix 自动 grounded |
 | 验证步骤 | 图内注入的 `verify_fn` | Workflow 内注入的 `verify_fn` |
@@ -93,8 +93,15 @@ cp .env.example .env
 | `AGNES_MODEL` | ✅† | 备选：Agnes 模型名（如 `agnes-2.0-flash`） |
 | `PSE_ROOT` | ✅ | `read_file` / `run_bash` 沙箱根路径 |
 | `PSE_MAX_RETRIES` | | 最大验证/修正轮数（默认 `3`） |
+| `EMBEDDING_PROVIDER` | | `openai`（DeepSeek/阿里 等）或 `ollama`（本地）。默认 `openai` |
+| `EMBEDDING_MODEL` | ✅‡ | Embedding 模型名（如 `deepseek-embedding`、`text-embedding-v4`） |
+| `EMBEDDING_API_KEY` | ✅‡ | 默认复用 `OPENAI_API_KEY` |
+| `EMBEDDING_BASE_URL` | | 默认复用 `OPENAI_BASE_URL` |
+| `OLLAMA_BASE_URL` | | Ollama 端点（默认 `http://localhost:11434`） |
 
-\* 使用 `provider="deepseek"`（默认）时必填。 &nbsp; † 使用 `provider="agnes"` 时必填。
+\* 使用 `provider="deepseek"`（默认）时必填。 &nbsp; † 使用 `provider="agnes"` 时必填。 &nbsp; ‡ `EMBEDDING_PROVIDER=openai` 时必填。
+
+> `resume-tailor` 任务还会从 `.env` 读取个人配置（`RESUME_*` 系列，见 `.env.example`）。这些配置含 PII（任职期间、源文件名、禁用语等），必须留在已 gitignore 的 `.env` 中。
 
 ## 新建一个任务
 
@@ -148,11 +155,24 @@ result = asyncio.run(workflow.run(
 ))
 ```
 
+## 数据流向与隐私
+
+本项目以**本地 CLI** 运行，但**并非离线隔离**：它会把你的任务数据发往第三方 API。
+
+- **LLM API**（`chat.completions`）— 完整的 `task_input`、`task_data`、检索到的 RAG 文档，以及每轮生成的产物，都会发往所选 provider（默认 DeepSeek，或 Agnes）。provider 按其自身留存策略存储 prompt。
+- **Embedding API**（`embeddings.create`）— 启用 RAG 时（如 `resume-tailor` 任务）会先把待索引文档切块，再发往 embedding 端点构建向量索引。默认 `EMBEDDING_PROVIDER=openai`（如 DeepSeek embedding）意味着**第二次外部传输**。将 `EMBEDDING_PROVIDER=ollama` 可让索引构建完全在本地完成。
+
+若输入含 PII（例如带真实雇主、日期、联系方式、私人仓库名的简历），这些 PII 会离开本机。要避免第三方传输，唯一途径是**自托管模型**（本地 LLM + 本地 embedding）。
+
+本机明文残留（即使完全不发 API 也存在）：
+- `tasks/<task>/prompts/*.md` 可能含真实 PII —— `tasks/*/prompts/recommend_specialist.md` 因此被 gitignore。
+- 生成产物（`tailored_resume.md`、`recommended_resume.md`）与 `.index_cache/` 虽已 gitignore，但仍以明文存于磁盘。
+
 ## 安全说明
 
-- **无硬编码密钥。** 所有凭证均从 `.env` 读取，`.env` 已 gitignore。
+- **无硬编码密钥.** 所有凭证均从 `.env` 读取，`.env` 已 gitignore。
 - **沙箱工具.** `read_file` 只能读 `PSE_ROOT` 内文件；`run_bash` 拦截破坏性命令（`rm -rf`、`dd`、`curl|sh` 等）并在 `PSE_ROOT` 内运行。
-- **无网络暴露服务.** 本项目仅作为本地 CLI 运行。
+- **进程本地、数据外发.** 本项目本身不暴露网络服务，但会向上述 LLM/Embedding provider 发送数据——详见[数据流向与隐私](#数据流向与隐私)。
 
 ## 许可证
 

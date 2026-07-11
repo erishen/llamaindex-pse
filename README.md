@@ -18,7 +18,7 @@ START → [planner] → specialist → evaluator ─┬─(pass)─▶ END
                                           └─(issues)─▶ fix → evaluator (loop, max N)
 ```
 
-1. **Planner (optional)** — RAG retrieves relevant documents, then a `FunctionCallingAgent` produces an execution plan grounded in real context.
+1. **Planner (optional)** — RAG retrieves relevant documents, then an LLM (custom OpenAI-compatible client, see `model.py`) produces an execution plan grounded in real context.
 2. **Specialist** — RAG retrieves (if Planner didn't), then expands the plan into the final artifact. The artifact is *source-grounded* — far less likely to hallucinate.
 3. **Evaluator (merged gate)** — runs every round and combines two checks:
    - **Programmatic verification** via a task-supplied `verify_fn(state) -> (bad, ok)`. This is *not* an LLM judge — deterministic checks are far more reliable than asking a model to grade its own output.
@@ -33,7 +33,7 @@ The retry loop is naturally expressed as **step → event → step** — no manu
 |---|---|---|
 | Orchestration | `StateGraph` + conditional edges | `Workflow` + `@step` + Event |
 | Retry loop | `add_conditional_edges("evaluator", should_fix)` | Evaluator returns `FixEvent` or `StopEvent` |
-| Tool use | LangGraph `create_agent` (LangChain tools) | LlamaIndex `FunctionCallingAgent` (FunctionTool) |
+| Tool use | LangGraph `create_agent` (LangChain tools) | LlamaIndex `FunctionTool` (sandboxed `read_file` / `run_bash`) |
 | State | `TypedDict` on graph edges | `dataclass` via `Context` |
 | RAG | — | **Built-in**: `retriever` parameter, auto-grounded Planner/Specialist/Fix |
 | Verify step | injected `verify_fn` in the graph | injected `verify_fn` in the workflow |
@@ -93,8 +93,15 @@ You need **either** the `OPENAI_*` set (DeepSeek is OpenAI-compatible) **or** th
 | `AGNES_MODEL` | ✅† | Alternative: Agnes model name (e.g. `agnes-2.0-flash`) |
 | `PSE_ROOT` | ✅ | Sandbox root for `read_file` / `run_bash` |
 | `PSE_MAX_RETRIES` | | Max evaluator/fix rounds (default: `3`) |
+| `EMBEDDING_PROVIDER` | | `openai` (DeepSeek/Ali, etc.) or `ollama` (local). Default `openai` |
+| `EMBEDDING_MODEL` | ✅‡ | Embedding model name (e.g. `deepseek-embedding`, `text-embedding-v4`) |
+| `EMBEDDING_API_KEY` | ✅‡ | Defaults to `OPENAI_API_KEY` |
+| `EMBEDDING_BASE_URL` | | Defaults to `OPENAI_BASE_URL` |
+| `OLLAMA_BASE_URL` | | Ollama endpoint (default `http://localhost:11434`) |
 
-\* required when `provider="deepseek"` (the default).  &nbsp; † required when `provider="agnes"`.
+\* required when `provider="deepseek"` (the default).  &nbsp; † required when `provider="agnes"`.  &nbsp; ‡ required when `EMBEDDING_PROVIDER=openai`.
+
+> The `resume-tailor` task also reads personal config from `.env` (`RESUME_*`, see `.env.example`). These contain PII (company periods, source file, banned year phrases) and must stay in the gitignored `.env`.
 
 ## Building a task
 
@@ -148,11 +155,24 @@ result = asyncio.run(workflow.run(
 ))
 ```
 
+## Data Flow & Privacy
+
+This project runs as a local CLI, but it is **not** air-gapped: it transmits your task data to third-party APIs.
+
+- **LLM API** (`chat.completions`) — the full `task_input`, `task_data`, retrieved RAG documents, and every generated artifact are sent to the configured provider (DeepSeek by default, or Agnes). The provider stores prompts under its own retention policy.
+- **Embedding API** (`embeddings.create`) — when RAG is enabled (the `resume-tailor` task uses it), the indexed documents are chunked and sent to the embedding endpoint to build the vector index. With the default `EMBEDDING_PROVIDER=openai` (e.g. DeepSeek embedding) this is a second external transfer. Set `EMBEDDING_PROVIDER=ollama` to keep index building fully local.
+
+If your input contains PII (e.g. a résumé with real employers, dates, contact info, or private repo names), that PII leaves your machine. The only way to avoid third-party transfer is to **self-host the models** (local LLM + local embedding).
+
+Local plaintext residues (present even without any API call):
+- Task prompts under `tasks/<task>/prompts/*.md` may contain real PII — `tasks/*/prompts/recommend_specialist.md` is gitignored for this reason.
+- Generated outputs (`tailored_resume.md`, `recommended_resume.md`) and `.index_cache/` are gitignored but stored unencrypted on disk.
+
 ## Security Notes
 
 - **No hardcoded secrets.** All credentials are read from `.env`, which is gitignored.
 - **Sandboxed tools.** `read_file` only reads under `PSE_ROOT`; `run_bash` blocks destructive commands (`rm -rf`, `dd`, `curl|sh`, …) and runs in `PSE_ROOT`.
-- **No network-exposed service.** This project runs locally as a CLI.
+- **Local process, external data.** The CLI itself is not network-exposed, but it sends data to the LLM/Embedding providers above — see [Data Flow & Privacy](#data-flow--privacy).
 
 ## License
 
