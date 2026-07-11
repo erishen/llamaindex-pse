@@ -168,6 +168,20 @@ Local plaintext residues (present even without any API call):
 - Task prompts under `tasks/<task>/prompts/*.md` may contain real PII — `tasks/*/prompts/recommend_specialist.md` is gitignored for this reason.
 - Generated outputs (`tailored_resume.md`, `recommended_resume.md`) and `.index_cache/` are gitignored but stored unencrypted on disk.
 
+## Relation to Sibling Frameworks
+
+All four share the **PSE role model** and a **verify→fix loop**, but differ in orchestration:
+
+| | `autogen-pse` | `crewai-pse` | `langgraph-pse` | `llamaindex-pse` |
+|---|---|---|---|---|
+| Orchestration | AutoGen `RoundRobinGroupChat` | CrewAI `Sequential` | LangGraph `StateGraph` + conditional edges | **LlamaIndex `Workflow` + `@step` + Event** |
+| Verify step | grep/pytest/ruff | regex/grep in `run.py` | injected `verify_fn` in the graph | injected `verify_fn` in the workflow |
+| RAG | optional | — | — | **built-in** (`retriever`, source-grounded — shifts the defense left) |
+| Reference use | asset-lens → next-week investment advice | project code → bilingual article → WordPress | CRM data-quality QA + weekly relationship review | **résumé tailoring (RAG)** |
+| Best for | cheap, frequent drafts | richer multi-agent publishing | explicit state control + anti-hallucination gates | **RAG-grounded generation** |
+
+The distinctive edge here is RAG: siblings *detect-and-repair* hallucinations after generation, whereas llamaindex-pse can *ground at the source* before generating — see [RAG: the LlamaIndex advantage](#rag-the-llamaindex-advantage).
+
 ## Security Notes
 
 - **No hardcoded secrets.** All credentials are read from `.env`, which is gitignored.

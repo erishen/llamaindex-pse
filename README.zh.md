@@ -168,6 +168,20 @@ result = asyncio.run(workflow.run(
 - `tasks/<task>/prompts/*.md` 可能含真实 PII —— `tasks/*/prompts/recommend_specialist.md` 因此被 gitignore。
 - 生成产物（`tailored_resume.md`、`recommended_resume.md`）与 `.index_cache/` 虽已 gitignore，但仍以明文存于磁盘。
 
+## 与兄弟框架的关系
+
+四者共享 **PSE 角色模型**与**验证→修正循环**，区别在编排：
+
+| | `autogen-pse` | `crewai-pse` | `langgraph-pse` | `llamaindex-pse` |
+|---|---|---|---|---|
+| 编排 | AutoGen `RoundRobinGroupChat` | CrewAI `Sequential` | LangGraph `StateGraph` + 条件边 | **LlamaIndex `Workflow` + `@step` + Event** |
+| 核查步骤 | grep/pytest/ruff | `run.py` 里正则/grep | 图中注入 `verify_fn` | 工作流中注入 `verify_fn` |
+| RAG | 可选 | — | — | **内置**（`retriever`，源头接地——把防线左移） |
+| 实际用途 | asset-lens → 下周投资建议 | 项目代码 → 中英文章 → WordPress | CRM 数据质量 QA + 每周关系复盘 | **简历定制（RAG）** |
+| 最适合 | 便宜、高频草稿 | 更丰富的多 Agent 发布 | 显式状态控制 + 抗幻觉关卡 | **RAG 接地生成** |
+
+这里的独特优势是 RAG：其他兄弟是在生成后*检测并修复*幻觉，而 llamaindex-pse 能在生成前*从源头接地*——见 [RAG：LlamaIndex 的核心优势](#ragllamaindex-的核心优势)。
+
 ## 安全说明
 
 - **无硬编码密钥.** 所有凭证均从 `.env` 读取，`.env` 已 gitignore。
