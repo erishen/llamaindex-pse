@@ -80,16 +80,23 @@ class FixEvent(Event):
 
 # ─────────────────────── RAG 辅助 ───────────────────────
 
-async def _retrieve_context(retriever, query: str, top_k: int = 5) -> str:
+async def _retrieve_context(retriever, query: str, top_k: int = 5, reranker=None) -> str:
     """用 LlamaIndex retriever 检索相关文档，拼接为上下文字符串。
 
     query 过长时会超出 embedding 模型上下文长度，因此截取前 200 字作为检索关键词。
+    如果提供 reranker，检索结果会先经过 Cross-Encoder 重排序。
     """
     # 截取短查询：embedding 模型上下文有限（如 Ollama snowflake-arctic-embed2 仅 8K tokens）
     short_query = query[:200] if len(query) > 200 else query
     nodes = retriever.retrieve(short_query)
     if not nodes:
         return ""
+    # Rerank：Cross-Encoder 重排序，提升检索精度
+    if reranker is not None:
+        try:
+            nodes = reranker.postprocess_nodes(nodes, query_str=short_query)
+        except Exception:
+            pass  # rerank 失败时 fallback 到原始排序
     # 取 top_k 个节点，按 score 降序
     sorted_nodes = sorted(nodes, key=lambda n: n.score or 0, reverse=True)[:top_k]
     parts = []
@@ -124,6 +131,7 @@ class PSEWorkflow(Workflow):
         retriever=None,
         planner_retriever=None,
         rag_top_k: int = 5,
+        reranker=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -137,6 +145,7 @@ class PSEWorkflow(Workflow):
         self._retriever = retriever  # specialist 用的 retriever（简历源数据）
         self._planner_retriever = planner_retriever  # planner 用的 retriever（市场/JD 情报）
         self._rag_top_k = rag_top_k
+        self._reranker = reranker  # Cross-Encoder reranker（可选）
 
         self._planner_prompt = load_prompt("planner", task) if use_planner else ""
         self._specialist_prompt = load_prompt("specialist", task)
@@ -163,10 +172,11 @@ class PSEWorkflow(Workflow):
         rag_ctx = ""
         pr = self._planner_retriever or self._retriever
         if pr:
-            rag_ctx = await _retrieve_context(pr, ev.task_input, self._rag_top_k)
+            rag_ctx = await _retrieve_context(pr, ev.task_input, self._rag_top_k, reranker=self._reranker)
             if rag_ctx:
                 label = "市场情报" if self._planner_retriever else "参考文档"
-                print(f"  📚 RAG 检索{label} {len(rag_ctx)} 字")
+                rerank_tag = " (reranked)" if self._reranker else ""
+                print(f"  📚 RAG 检索{label}{rerank_tag} {len(rag_ctx)} 字")
 
         full_input = ev.task_input
         if rag_ctx:
@@ -195,9 +205,10 @@ class PSEWorkflow(Workflow):
         state: PSEState = await ctx.store.get("state")
         rag_ctx = state.rag_context
         if not rag_ctx and self._retriever:
-            rag_ctx = await _retrieve_context(self._retriever, ev.task_input, self._rag_top_k)
+            rag_ctx = await _retrieve_context(self._retriever, ev.task_input, self._rag_top_k, reranker=self._reranker)
             if rag_ctx:
-                print(f"  📚 RAG 检索简历源数据 {len(rag_ctx)} 字")
+                rerank_tag = " (reranked)" if self._reranker else ""
+                print(f"  📚 RAG 检索简历源数据{rerank_tag} {len(rag_ctx)} 字")
                 state.rag_context = rag_ctx
                 await ctx.store.set("state", state)
 
@@ -357,6 +368,7 @@ def build_workflow(
     retriever=None,
     planner_retriever=None,
     rag_top_k: int = 5,
+    reranker=None,
 ) -> PSEWorkflow:
     """构建通用 PSE Workflow。
 
@@ -369,6 +381,7 @@ def build_workflow(
     retriever:        Specialist 用的 Retriever（简历源数据）。
     planner_retriever: Planner 用的 Retriever（市场/JD 情报）。不传则 fallback 到 retriever。
     rag_top_k:        RAG 检索返回的最大文档数（默认 5）。
+    reranker:         Cross-Encoder Reranker（可选），对检索结果重排序提升精度。
     返回 PSEWorkflow 实例，用 await workflow.run(task_input=..., task_data=..., max_retries=...) 调用。
     """
     return PSEWorkflow(
@@ -382,4 +395,5 @@ def build_workflow(
         retriever=retriever,
         planner_retriever=planner_retriever,
         rag_top_k=rag_top_k,
+        reranker=reranker,
     )

@@ -448,7 +448,7 @@ def _build_index(docs_dir: Path, subdirs: list[str], index_cache_dir: Path,
 
 # ─── 文档分区定义 ───
 # resume_source: 简历事实来源（Specialist 用）
-RESUME_PARTITIONS = ["resume2026ppcnlean-v2"]
+RESUME_PARTITIONS = ["resume2026ppcnlean-v2", "resume-fragments"]
 # market_intel: 面试/JD/工作细节情报（Planner 用）
 MARKET_PARTITIONS = ["interview", "interview2026", "jd", "paypal", "work", "technical", "linkedin"]
 
@@ -537,6 +537,16 @@ async def main():
     # 构建 PSE workflow
     max_retries = settings.PSE_MAX_RETRIES or 3
 
+    # 构建 Cross-Encoder Reranker（可选，提升 RAG 检索精度）
+    reranker = None
+    reranker_model = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+    try:
+        from llama_index.core.postprocessor import SentenceTransformerRerank
+        reranker = SentenceTransformerRerank(model=reranker_model, top_n=args.top_k)
+        print(f"   Reranker: {reranker_model}")
+    except Exception as e:
+        print(f"   ⚠️ Reranker 不可用 ({e})，将使用原始检索排序")
+
     if is_recommend:
         # ── 自由推荐模式 ──
         # 加载推荐模式的专用提示词
@@ -555,6 +565,7 @@ async def main():
             retriever=resume_retriever,        # Specialist: 简历源数据
             planner_retriever=market_retriever, # Planner: 市场/JD 情报
             rag_top_k=args.top_k,
+            reranker=reranker,
         )
         # 覆盖提示词为推荐模式专用
         workflow._planner_prompt = planner_prompt
@@ -588,6 +599,14 @@ async def main():
                     + "\n\n".join(personal_parts) + "\n\n"
                 )
                 print(f"   📋 个人特点文档已注入: {len(personal_parts)} 个文件")
+
+        # 注入市场趋势与项目映射（项目选择的决策指南）
+        mapping_file = docs_dir / "resume-fragments" / "market-trend-mapping.md"
+        if mapping_file.exists():
+            mapping_content = mapping_file.read_text(encoding="utf-8").strip()
+            if mapping_content:
+                task_input += f"## 市场趋势与项目映射（项目选择决策指南）\n\n{mapping_content}\n\n"
+                print(f"   🎯 市场趋势映射已注入")
 
         rag_keywords = settings.RESUME_RAG_KEYWORDS
         if rag_keywords:
@@ -623,6 +642,7 @@ async def main():
             retriever=resume_retriever,        # Specialist: 简历源数据
             planner_retriever=market_retriever, # Planner: 市场/JD 情报
             rag_top_k=args.top_k,
+            reranker=reranker,
         )
 
         # task_input: 简历全文注入（事实基础）+ 个人特点注入
@@ -648,6 +668,14 @@ async def main():
                     + "\n\n".join(personal_parts) + "\n\n"
                 )
                 print(f"   📋 个人特点文档已注入: {len(personal_parts)} 个文件")
+
+        # 注入市场趋势与项目映射
+        mapping_file = docs_dir / "resume-fragments" / "market-trend-mapping.md"
+        if mapping_file.exists():
+            mapping_content = mapping_file.read_text(encoding="utf-8").strip()
+            if mapping_content:
+                task_input += f"## 市场趋势与项目映射（项目选择决策指南）\n\n{mapping_content}\n\n"
+                print(f"   🎯 市场趋势映射已注入")
 
         print(f"\n🚀 JD 定制模式 (provider={args.provider}, max_retries={max_retries})")
         print(f"   RAG 分区: Planner→市场情报, Specialist→简历源数据")
