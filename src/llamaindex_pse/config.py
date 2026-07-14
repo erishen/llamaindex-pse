@@ -47,8 +47,19 @@ class Settings:
     RESUME_DEFAULT_DIRECTION: str = os.getenv("RESUME_DEFAULT_DIRECTION", "")
     # RAG 检索关键词（Planner 市场情报检索用）
     RESUME_RAG_KEYWORDS: str = os.getenv("RESUME_RAG_KEYWORDS", "")
+    # 固定目标岗位（自由推荐模式）：设置后大标题与求职意向严格使用该称谓，跳过 LLM 自由选岗
+    RESUME_TARGET_ROLE: str = os.getenv("RESUME_TARGET_ROLE", "")
     # 禁止出现的年限表述（正则，用 | 分隔多个模式）
     RESUME_BANNED_YEARS: str = os.getenv("RESUME_BANNED_YEARS", "")
+    # 项目时间修正：格式 "起始时间:内容关键词正则"（如 "2026.01:测试体系|工程化"）
+    RESUME_LATE_START_FIX: str = os.getenv("RESUME_LATE_START_FIX", "")
+    # 职位修正：LLM 常写错职位标题
+    RESUME_WRONG_TITLE: str = os.getenv("RESUME_WRONG_TITLE", "")
+    RESUME_CORRECT_TITLE: str = os.getenv("RESUME_CORRECT_TITLE", "")
+    # 幻觉数字清理：| 分隔的字符串列表
+    RESUME_HALLUCINATIONS: str = os.getenv("RESUME_HALLUCINATIONS", "")
+    # GitHub 用户名（链接归一化用）
+    GITHUB_USERNAME: str = os.getenv("GITHUB_USERNAME", "")
 
 
 settings = Settings()

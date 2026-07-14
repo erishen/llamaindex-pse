@@ -1,0 +1,32 @@
+{
+  "patterns": [
+    ["zhangsan@example\\.com", "［企业邮箱］"],
+    ["[A-Za-z0-9._%+-]+@example\\.com", "［企业邮箱］"],
+    ["user@example\\.com", "［个人邮箱］"],
+    ["13800000000", "［手机号］"],
+    ["example\\.com", "［个人站点］"],
+    ["github\\.com/yourname", "［GitHub］"],
+    ["张三", "［姓名］"],
+    ["San Zhang", "［姓名］"],
+    ["DeepSeek", "［模型:DS］"],
+    ["ChatGPT", "［模型:GPT］"],
+    ["OpenAI", "［模型:OA］"],
+    ["\\bagnes\\b", "［模型:AG］"]
+  ],
+  "restore": {
+    "［姓名］": "张三",
+    "［个人邮箱］": "user@example.com",
+    "［企业邮箱］": "zhangsan@example.com",
+    "［手机号］": "13800000000",
+    "［个人站点］": "example.com",
+    "［GitHub］": "github.com/yourname",
+    "［模型:DS］": "DeepSeek",
+    "［模型:GPT］": "ChatGPT",
+    "［模型:OA］": "OpenAI",
+    "［模型:AG］": "agnes"
+  },
+  "opensource": [
+    {"name": "autogen-pse", "desc": "示例项目 A（PSE 三角色 Agent 框架）", "stack": "示例技术栈"},
+    {"name": "agentic-souls", "desc": "示例项目 B（PSE 多角色协作思想原型）", "stack": "示例技术栈"}
+  ]
+}

@@ -1,4 +1,4 @@
-.PHONY: install lint clean resume-tailor resume-tailor-agnes resume-recommend resume-recommend-agnes resume-tailor-rebuild help
+.PHONY: install lint clean resume-tailor resume-tailor-agnes resume-recommend resume-recommend-agnes resume-tailor-rebuild resume-tailor-rebuild-agnes help
 
 PY := uv run python
 
@@ -29,9 +29,13 @@ resume-recommend: ## 自由推荐模式 - deepseek（无需 JD）
 resume-recommend-agnes: ## 自由推荐模式 - agnes（无需 JD）
 	$(PY) tasks/resume-tailor/run.py --recommend --provider agnes $(if $(DOCS),--docs $(DOCS),)
 
-resume-tailor-rebuild: ## 强制重建分区 embedding 索引
+resume-tailor-rebuild: ## 强制重建分区 embedding 索引 - deepseek
 	rm -rf tasks/resume-tailor/.index_cache/
 	$(PY) tasks/resume-tailor/run.py --recommend --rebuild
+
+resume-tailor-rebuild-agnes: ## 强制重建分区 embedding 索引 - agnes
+	rm -rf tasks/resume-tailor/.index_cache/
+	$(PY) tasks/resume-tailor/run.py --recommend --rebuild --provider agnes
 
 help: ## 列出全部命令
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \

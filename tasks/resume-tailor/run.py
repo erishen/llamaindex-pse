@@ -13,6 +13,7 @@
 
 import argparse
 import asyncio
+import difflib
 import json
 import os
 import re
@@ -22,6 +23,10 @@ from pathlib import Path
 # LlamaIndex Workflow 内部创建 event loop，需要 nest_asyncio 允许嵌套
 import nest_asyncio
 nest_asyncio.apply()
+
+# 运行时脱敏：发往外部 LLM / Embedding API 前遮蔽直接个人标识符
+from privacy import redact, finalize
+from llamaindex_pse.prompts import _substitute
 
 BASE = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE.parent.parent
@@ -63,14 +68,388 @@ def _get_required_companies() -> list[str]:
     return []
 
 
-def _postprocess_resume(resume: str) -> str:
+def _normalize_github_links(text: str) -> str:
+    """归一开源链接：LLM 偶发写出 github.com/<user>(<url>) 破损写法，
+    统一修正为标准 Markdown [url](url)。"""
+    from llamaindex_pse.config import settings
+    _gh_user = getattr(settings, "GITHUB_USERNAME", "")
+    if _gh_user:
+        text = re.sub(rf"github\.com/{re.escape(_gh_user)}\(<?(https?://[^)>]+)>?\)", r"[\1](\1)", text)
+    text = re.sub(r"\(<(https?://[^>\s]+)>\)", r"[\1](\1)", text)
+    return text
+
+
+def _apply_target_role(text: str, role: str) -> str:
+    """确定性固定目标岗位：大标题与求职意向·期望职位均强制为 role。
+
+    仅用于自由推荐模式且设置了 RESUME_TARGET_ROLE 时，保证标题不再随 LLM 采样漂移。
+    兼容 DeepSeek 格式（# 姓名 | 岗位）和 Agnes 格式（# 姓名 - 岗位/岗位）。
+    """
+    # 大标题：匹配 # 姓名 <分隔符> 任意岗位 两种变体
+    #   DeepSeek: # 孙磊 | AI 工程师
+    #   Agnes:    # 孙磊 - AI 工程化工程师 / LLM 应用工程师
+    # 用 [^|\n-]+ 吃姓名（不含 | 和 -），再用 [|\-] 匹配分隔符
+    text = re.sub(
+        r"^(#\s[^|\n-]+)[|\-].*$",
+        lambda m: f"{m.group(1).strip()} | {role}",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    # 求职意向·期望职位（兼容 期望职位/期望岗位/期望方向 三种表述）
+    text = re.sub(
+        r"(\*\*(?:期望职位|期望岗位|期望方向)\*\*[：:]\s*).*",
+        lambda m: f"{m.group(1)}{role}",
+        text,
+    )
+    return text
+
+
+def _load_base_tagline() -> str:
+    """读取基准简历的 `>` 标语行（缺失时回填，保证多 provider 产出样式一致）。"""
+    try:
+        from llamaindex_pse.config import settings
+        repo_root = BASE.parent.parent.parent.parent
+        name = getattr(settings, "RESUME_SOURCE_FILE", None) or "ai-engineering.md"
+        base_path = repo_root / "work" / "docs" / "resume2026ppcnlean-v2" / name
+        if base_path.exists():
+            for ln in base_path.read_text(encoding="utf-8").splitlines():
+                if ln.strip().startswith(">"):
+                    return ln.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _normalize_job_intent(resume: str) -> str:
+    """归一化「求职意向/期望」章节：无论 LLM 生成几种变体
+    （顶部 ## 求职意向 / 底部 ## 求职期望 / 标题下 inline 求职意向：…），
+    统一合并为恰好一个 ## 求职意向 章节，且期望职位强制为目标岗位（RESUME_TARGET_ROLE）。
+
+    根因：后处理只「补全」不「去重」，LLM 偶发同时产出顶部 ## 求职意向 与
+    底部 ## 求职期望（且顶部误用 **求职意向** key 逃过 _apply_target_role 的匹配），
+    造成重复且自相矛盾。此处用逐行解析确定性合并，彻底消除该问题。
+    """
+    from llamaindex_pse.config import settings
+    role = getattr(settings, "RESUME_TARGET_ROLE", "") or ""
+
+    collected: dict[str, str | None] = {"期望职位": None, "工作地点": None, "理想方向": None}
+    _INTENT_KEY_RE = re.compile(
+        r"^\s*\*{0,2}(期望职位|期望岗位|期望方向|求职意向|工作地点|理想方向)\*{0,2}[：:]\s*(.+?)\s*$"
+    )
+    _SECTION_RE = re.compile(r"^##\s*求职(意向|期望|意向[·\-]?期望职位|期望职位)\b")
+
+    def _ingest_line(line: str) -> None:
+        m = _INTENT_KEY_RE.match(line)
+        if not m:
+            return
+        key, val = m.group(1), m.group(2).strip()
+        norm = "期望职位" if key in ("期望职位", "期望岗位", "期望方向", "求职意向") else key
+        if collected[norm] is None:
+            collected[norm] = val
+
+    lines = resume.split("\n")
+    first_section = next((i for i, ln in enumerate(lines) if re.match(r"^##\s", ln)), len(lines))
+
+    # 1a. 收集标题块内 inline 求职行
+    for ln in lines[:first_section]:
+        _ingest_line(ln)
+
+    # 1b. 收集所有 ## 求职* 章节区间
+    section_ranges: list[tuple[int, int]] = []
+    i = 0
+    while i < len(lines):
+        if _SECTION_RE.match(lines[i]):
+            start = i
+            i += 1
+            while i < len(lines) and not re.match(r"^##\s", lines[i]):
+                _ingest_line(lines[i])
+                i += 1
+            section_ranges.append((start, i))
+        else:
+            i += 1
+
+    # 2. 删除章节整段 + 标题块内 inline 求职行
+    remove_idx: set[int] = set()
+    for s, e in section_ranges:
+        for j in range(s, e):
+            remove_idx.add(j)
+    for j in range(first_section):
+        if _INTENT_KEY_RE.match(lines[j]):
+            remove_idx.add(j)
+    new_lines = [ln for j, ln in enumerate(lines) if j not in remove_idx]
+
+    # 3. 组装规范章节（期望职位强制为目标岗位，消除顶部/底部自相矛盾）
+    position = role or collected["期望职位"] or getattr(settings, "RESUME_DEFAULT_POSITION", "") or ""
+    location = collected["工作地点"] or getattr(settings, "RESUME_DEFAULT_LOCATION", "") or ""
+    direction = collected["理想方向"] or getattr(settings, "RESUME_DEFAULT_DIRECTION", "") or ""
+    if not (position or location or direction):
+        return resume
+
+    block = ["## 求职意向", "", f"**期望职位**：{position}"]
+    if location:
+        block.append(f"**工作地点**：{location}")
+    if direction:
+        block.append(f"**理想方向**：{direction}")
+
+    # 4. 插入到首个 ## 之前
+    fs2 = next((i for i, ln in enumerate(new_lines) if re.match(r"^##\s", ln)), len(new_lines))
+    prefix = new_lines[:fs2]
+    while prefix and not prefix[-1].strip():
+        prefix.pop()
+    result = prefix + ["", ""] + block + [""] + new_lines[fs2:]
+    return "\n".join(result)
+
+
+def _ensure_tagline(resume: str) -> str:
+    """确保标题后存在一行 `>` 标语（与基准简历一致）；缺失则回填，保证多 provider 样式统一。"""
+    if re.search(r"(?m)^>\s", resume):
+        return resume
+    tagline = _load_base_tagline()
+    if not tagline:
+        return resume
+    lines = resume.split("\n")
+    title_idx = next((i for i, ln in enumerate(lines) if re.match(r"^#\s", ln)), None)
+    if title_idx is None:
+        return resume
+    insert_idx = len(lines)
+    for j in range(title_idx + 1, len(lines)):
+        if lines[j].strip().startswith("---") or lines[j].strip().startswith("## "):
+            insert_idx = j
+            break
+    lines.insert(insert_idx, tagline)
+    return "\n".join(lines)
+
+
+# 代表项目在基准简历中的「项目名关键词 → 确认起止区间」映射。
+# 关键词用于匹配生成的 ### 标题（agnes 用「项目名 (公司 | 区间)」、deepseek 用「公司 - 项目名」+ 粗体行两种写法）。
+_PROJECT_KEYWORDS = ["迁移验证", "技术预研", "身份验证", "迪士尼", "营销落地页", "国际站内容平台"]
+
+
+def _build_project_date_map(base_text: str) -> dict[str, str]:
+    """从基准简历「代表项目」段解析 关键词→确认起止区间（YYYY.MM-YYYY.MM）。"""
+    m = re.search(r"##\s*代表项目\s*\n(.*?)(?=\n##\s|\Z)", base_text, re.DOTALL)
+    section = m.group(1) if m else ""
+    out: dict[str, str] = {}
+    for kw in _PROJECT_KEYWORDS:
+        hm = re.search(r"^###\s+.*?" + re.escape(kw) + r".*?$", section, re.M)
+        if not hm:
+            continue
+        dm = re.match(r"\s*\*\*([\d]{4}(?:\.\d\d)?\s*-\s*[\d]{4}(?:\.\d\d)?)\s*\|", section[hm.end():])
+        if dm:
+            out[kw] = dm.group(1)
+    return out
+
+
+def _normalize_project_dates(resume: str, base_text: str) -> str:
+    """以基准简历确认的起止区间为准，强制归一生成简历中的项目日期。
+
+    根因：LLM 偶发不照抄基准区间，而是从任职 tenure 推断（如把 CIP 写成 2025.01-2026.07
+    而非基准确认的 2025.01-2025.12），且 agnes/deepseek 两种标题写法并存。
+    此处确定性地把每个项目的日期替换为基准确认值，保证多 provider 产物日期一致且准确。
+    """
+    date_map = _build_project_date_map(base_text)
+    if not date_map:
+        return resume
+    lines = resume.split("\n")
+    for i, line in enumerate(lines):
+        if not line.startswith("### "):
+            continue
+        matched = next((kw for kw in date_map if kw in line), None)
+        if not matched:
+            continue
+        canonical = date_map[matched]
+        # case A: 标题内嵌 (公司 | RANGE) —— agnes 写法
+        new_line, n = re.subn(
+            r"(\|\s*)[\d]{4}(?:\.\d\d)?\s*-\s*[\d]{4}(?:\.\d\d)?(?=\s*\))",
+            lambda mm: mm.group(1) + canonical,
+            line,
+        )
+        if n:
+            lines[i] = new_line
+            continue
+        # case B: 标题下（可能隔 1 个空行）的 **RANGE | 技术栈** —— deepseek 写法
+        # deepseek 常在 ### 标题与日期行之间插一个空行，故向前扫描若干行定位日期行。
+        for j in range(i + 1, min(i + 4, len(lines))):
+            if lines[j].startswith("**") and re.match(
+                r"^\*\*[\d]{4}(?:\.\d\d)?\s*-\s*[\d]{4}(?:\.\d\d)?", lines[j]
+            ):
+                lines[j], _ = re.subn(
+                    r"^(\*\*)[\d]{4}(?:\.\d\d)?\s*-\s*[\d]{4}(?:\.\d\d)?",
+                    lambda mm: mm.group(1) + canonical,
+                    lines[j],
+                )
+                break
+    return "\n".join(lines)
+
+
+def _normalize_opensource_section(resume: str, base_text: str) -> str:
+    """开源章节永远以基准简历为准，杜绝 LLM 把 prompt 内部指令或越界仓库抄进产物。
+
+    根因：agnes 曾把 recommend_specialist.md 的开源"硬性限制"规则 + 6 仓库候选列表原样复制到
+    简历末段，标题还带"（⚠️ 违反以下规则即不合格）"。此处确定性地删除任何 LLM 生成的开源章节
+    （不论标题写法多脏，含括号后缀），再从基准简历"## 个人开源与 AI 实验"块原样重插，
+    保证与基准精简口径（当前 3 个仓库）一致。
+    """
+    m = re.search(
+        r"##\s*个人开源与 AI 实验\s*\n(.*?)(?=\n##\s|\Z)", base_text, re.DOTALL
+    )
+    if not m:
+        return resume
+    canonical = "## 个人开源与 AI 实验\n" + m.group(1).strip()
+
+    # 1. 删除 LLM 生成的任何开源章节（标题可能带括号后缀）
+    resume = re.sub(
+        r"(?m)^##\s*(?:个人开源与 AI 实验|开源项目|开源贡献|开源经历)\b.*$\n(?:.*\n)*?(?=^##\s|\Z)",
+        "",
+        resume,
+    )
+
+    # 2. 在"## 教育背景"前（或文末）重插规范块
+    if re.search(r"(?m)^##\s*教育背景", resume):
+        resume = re.sub(
+            r"(?m)(^##\s*教育背景)",
+            canonical + "\n\n" + r"\1",
+            resume,
+            count=1,
+        )
+    else:
+        resume = resume.rstrip() + "\n\n" + canonical + "\n"
+    return resume
+
+
+def _reorder_projects_by_date(resume: str, latest_end: str = "", latest_company: str = "") -> str:
+    """确定性地把所有「重点项目」块按 (结束年月, 起始年月) 倒序重排。
+
+    不依赖 LLM 是否产出 ``## 重点项目`` 章节：只要 ``###`` 标题或紧跟行含
+    ``(公司 | YYYY.MM - YYYY.MM)`` 即视为项目块，按结束月份倒序、起始月份倒序
+    稳定排列（平局保持原顺序）。非项目块（工作经历 ``### 公司 | 职位``、``##`` 章节）
+    位置不变。
+
+    排序键 (end_ym, start_ym) 倒序 => 最新结束的排最前；同结束时起始更晚的排更前。
+    """
+    # 当前公司"至今"替换为实际离职时间（与历史逻辑一致）
+    if latest_end and latest_company:
+        resume = re.sub(
+            rf"\({re.escape(latest_company)} \| (\d{{4}}\.\d{{2}})-至今\)",
+            f"({latest_company} | \\1-{latest_end})",
+            resume,
+        )
+        resume = re.sub(
+            rf"\({re.escape(latest_company)} \| (\d{{4}}\.\d{{2}})-(\d{{4}}\.\d{{2}})\)",
+            lambda m: f"({latest_company} | {m.group(1)}-{latest_end})"
+            if m.group(2) != latest_end
+            else m.group(0),
+            resume,
+        )
+
+    def _project_date(seg: str):
+        """从项目块提取 (结束年月, 起始年月)；非项目块返回 None。
+
+        判定为项目的依据（可靠，不会误伤工作经历块）：
+        - 标题含 ``(公司 | YYYY.MM - YYYY.MM)``（agnes 写法）；或
+        - 标题之后首个非空行是 ``**YYYY.MM - YYYY.MM | 技术栈**``（deepseek 写法，
+          标题与日期间允许有空行）。
+        工作经历块（``### 公司 | 职位``）标题无日期、首行也非 ``**日期**``，必返回 None。
+        """
+        seg = seg.lstrip()
+        if not seg.startswith("###"):
+            return None
+        title = seg[3:].split("\n", 1)[0]
+        m = re.search(r"\|(\d{4})\.(\d{2})\s*[-–—]\s*(\d{4})\.(\d{2})", title)
+        if m:
+            sy, sm, ey, em = (int(m.group(i)) for i in (1, 2, 3, 4))
+            return (ey * 12 + em, sy * 12 + sm)
+        rest = seg.split("\n", 1)[1] if "\n" in seg else ""
+        for line in rest.split("\n"):
+            if not line.strip():
+                continue
+            m = re.match(r"^\*\*(\d{4})\.(\d{2})\s*[-–—]\s*(\d{4})\.(\d{2})", line)
+            if m:
+                sy, sm, ey, em = (int(m.group(i)) for i in (1, 2, 3, 4))
+                return (ey * 12 + em, sy * 12 + sm)
+            break
+        return None
+
+    def _is_project(seg: str) -> bool:
+        return _project_date(seg) is not None
+
+    # 用户确认的「代表项目」canonical 顺序：覆盖纯日期排序，避免同年结束的项目
+    # （如 CIP 与营销落地页均结束 2025.12）在重排时抖动。关键字按出现优先级
+    # 匹配标题，agnes / deepseek 两种标题写法都能命中。
+    canonical_order = [
+        "迁移验证",     # AI 支付迁移验证与自动化工程化
+        "预研",         # 个人技术预研 - AI 支付迁移方法论验证
+        "客户身份验证", # 客户身份验证平台 (CIP)
+        "营销",         # 营销落地页平台组件开发
+        "迪士尼",       # 迪士尼 AI 数字人客服系统
+        "Trip.com",     # Trip.com 国际站内容平台
+    ]
+
+    def _rank(seg: str) -> int:
+        title = seg.lstrip()[3:].split("\n", 1)[0]
+        for idx, kw in enumerate(canonical_order):
+            if kw in title:
+                return idx
+        return len(canonical_order)  # 未知项目靠后，按日期倒序
+
+    def _key(seg):
+        d = _project_date(seg)
+        rank = _rank(seg)
+        # rank 升序优先；同 rank（未知项目）时按 (结束月,起始月) 倒序
+        if d is not None:
+            return (rank, -d[0], -d[1])
+        return (rank, 0, 0)
+
+    parts = re.split(r"(?=\n###\s)", resume)
+    out = list(parts)
+    i, n = 0, len(parts)
+    while i < n:
+        if _is_project(parts[i]):
+            j = i
+            while j < n and _is_project(parts[j]):
+                j += 1
+            out[i:j] = sorted(parts[i:j], key=_key, reverse=False)
+            i = j
+        else:
+            i += 1
+    return "".join(out)
+
+
+def _postprocess_resume(resume: str, base_text: str = "") -> str:
     """确定性后处理：修正 LLM 不遵循的结构性规则。
 
     1. 强制删除配置的年限表述
     2. 把项目标题下一行的 **(公司 | 时间)** 合并到标题中
     3. 重点项目按时间倒序重排
+    4. 项目日期以基准简历确认区间为准强制归一（防 LLM 推断偏差）
     """
     from llamaindex_pse.config import settings
+
+    # 0. 大小写规范化（LLM 偶发 Typescript 小写 s）
+    resume = re.sub(r"\bTypescript\b", "TypeScript", resume)
+
+    # 0a. 剥离 LLM 对话前言：流水线保存的是 Fix/Specialist 的完整回复，
+    #     可能以"根据问题清单和真实数据…"之类的 wrapper 开头。
+    #     从首个 Markdown 标题(# )起截取正文，丢弃标题前的所有聊天内容。
+    _h = re.search(r"(?m)^#\s", resume)
+    if _h:
+        resume = resume[_h.start():]
+    # 去掉正文开头可能残留的分隔线/空行
+    resume = re.sub(r"^\s*(?:\*\*\*|------+|---+)\s*\n+", "", resume, count=1)
+
+    # 0b. 修正开源项目链接格式（详见 _normalize_github_links）
+    resume = _normalize_github_links(resume)
+
+    # 0c. 求职意向/期望 章节归一化：合并所有变体为单一 ## 求职意向（确定性，防 LLM 重复产出）
+    resume = _normalize_job_intent(resume)
+    # 0d. 标语行回填：缺失时从基准简历注入，保证多 provider 产出样式一致
+    resume = _ensure_tagline(resume)
+    # 0e. 项目日期以基准简历确认区间为准强制归一（防 LLM 从 tenure 推断偏差）
+    if base_text:
+        resume = _normalize_project_dates(resume, base_text)
+        # 0f. 开源章节以基准简历为准重插（防 LLM 抄 prompt 内部规则 / 越界仓库）
+        resume = _normalize_opensource_section(resume, base_text)
 
     # 1. 删除配置的年限表述（如"20年"、"二十年"等）
     banned_years = settings.RESUME_BANNED_YEARS
@@ -87,6 +466,8 @@ def _postprocess_resume(resume: str) -> str:
             # 清理残留变体
             resume = re.sub(rf"\b{pattern}\s*年\b", "", resume)
             resume = re.sub(rf"{pattern}年", "", resume)
+            # 连同前面的程度副词（近/约/已/超过/达）一起删除，避免留下「近 ，」这类破句
+            resume = re.sub(rf"(近|约|已|超过|达)\s*{pattern}\s*年", "", resume)
 
     # 2. 合并项目标题下一行的时间到标题中
     #    匹配: ### 项目名\n**(公司 | 时间)**  →  ### 项目名 (公司 | 时间)
@@ -121,74 +502,96 @@ def _postprocess_resume(resume: str) -> str:
     except Exception:
         latest_end, latest_company, latest_start = "", "", ""
     if latest_end and latest_company and latest_start:
-        # 工作经历行：*YYYY.MM - 至今* → *YYYY.MM - YYYY.MM*
+        # 工作经历行：*YYYY.MM - 至今* → *YYYY.MM - YYYY.MM*（DeepSeek 斜体）
         resume = re.sub(
             rf"\*{latest_start} - 至今\*",
             f"*{latest_start} - {latest_end}*",
             resume,
         )
-        # 项目标题中该公司任意起始时间的"至今"：(Company | YYYY.MM-至今)
+        # 工作经历行：**YYYY.MM - 至今** → **YYYY.MM - YYYY.MM**（Agnes 加粗）
+        resume = re.sub(
+            rf"\*\*{latest_start} - 至今\*\*",
+            f"**{latest_start} - {latest_end}**",
+            resume,
+        )
+        # 工作经历行：**... | YYYY.MM - 至今** → **... | YYYY.MM - YYYY.MM**（Agnes 职位+日期加粗）
+        resume = re.sub(
+            rf"\*\*[^|]* \| {latest_start} - 至今\*\*",
+            f"**高级全栈工程师 | {latest_start} - {latest_end}**",
+            resume,
+        )
+        # 项目标题中该公司任意起始时间的"至今"：(Company | YYYY.MM-至今        )
         resume = re.sub(
             rf"\({re.escape(latest_company)} \| (\d{{4}}\.\d{{2}})-至今\)",
             f"({latest_company} | \\1-{latest_end})",
             resume,
         )
 
-    # 3. 重点项目按时间倒序重排
-    #    找到 ## 重点项目 区域，解析每个 ### 子块，按起始年份倒序重排
-    project_section_match = re.search(
-        r"(##\s*重点项目\n+)(.*?)(?=\n##\s|\Z)", resume, re.DOTALL
-    )
-    if project_section_match:
-        header = project_section_match.group(1)
-        body = project_section_match.group(2)
+    # 2c. 安全网：修正已知 LLM 非确定性错误
 
-        # 3a. 去掉项目标题中的编号（"### 1. " → "### "）
-        body = re.sub(r"(###\s+)\d+\.\s+", r"\1", body)
-
-        # 3a2. 去掉项目块之间的 --- 分隔线（可能有前后空行）
-        body = re.sub(r"\n\s*---\s*\n(?=\n###\s)", "\n", body)
-
-        # 3b. 当前公司项目"至今"替换为实际离职时间（匹配任意起始时间）
-        if latest_end and latest_company:
-            body = re.sub(
-                rf"\({re.escape(latest_company)} \| (\d{{4}}\.\d{{2}})-至今\)",
-                f"({latest_company} | \\1-{latest_end})",
-                body,
-            )
-
-        # 3c. 强制修正当前公司项目的结束日期
-        # LLM 可能输出错误的结束日期（如 2025.06），强制替换为实际离职时间
-        if latest_end and latest_company:
-            body = re.sub(
-                rf"\({re.escape(latest_company)} \| (\d{{4}}\.\d{{2}})-(\d{{4}}\.\d{{2}})\)",
-                lambda m: f"({latest_company} | {m.group(1)}-{latest_end})"
-                         if m.group(2) != latest_end else m.group(0),
-                body,
-            )
-
-        # 拆分每个项目块（以 ### 开头）
-        project_blocks = re.split(r"(?=\n###\s)", body)
-        # 过滤空块
-        project_blocks = [b for b in project_blocks if b.strip()]
-
-        def _extract_start_ym(block: str) -> int:
-            """从项目块标题提取起始年月，用于精确排序。返回 YYYY*12+MM。"""
-            title_line = block.strip().split("\n")[0]
-            # 匹配 YYYY.MM- 格式
-            m = re.search(r"(\d{4})\.(\d{2})\s*[-–—]", title_line)
-            if m:
-                return int(m.group(1)) * 12 + int(m.group(2))
-            # fallback: 只匹配年份
-            m2 = re.search(r"(\d{4})", title_line)
-            return int(m2.group(1)) * 12 if m2 else 0
-
-        # 纯时间倒序排列（最新的项目排最前面）
-        project_blocks.sort(key=_extract_start_ym, reverse=True)
-        resume = resume.replace(
-            project_section_match.group(0),
-            header + "".join(project_blocks),
+    # PayPal 项目时间修正：LLM 常将迁移验证/测试体系项目时间写成晚于入职的起始时间，
+    # 实际这些项目从入职即开始。通过配置识别需要修正的项目。
+    _late_start_cfg = getattr(settings, "RESUME_LATE_START_FIX", "")
+    # 格式: "2026.01:测试体系|工程化|多语言.*电商" (起始时间:内容关键词)
+    if latest_start and _late_start_cfg and ":" in _late_start_cfg:
+        _late_start_time, _late_keywords = _late_start_cfg.split(":", 1)
+        _paypal_late_start_pattern = re.compile(
+            rf"\({re.escape(latest_company)} \| {re.escape(_late_start_time)}-(\d{{4}}\.\d{{2}})\)"
         )
+        _late_start_matches = list(_paypal_late_start_pattern.finditer(resume))
+        for m in reversed(_late_start_matches):
+            block_start = m.start()
+            header_start = resume.rfind("\n### ", 0, block_start)
+            if header_start == -1:
+                header_start = resume.rfind("### ", 0, block_start)
+            next_section = re.search(r"\n(?:###|##)\s", resume[block_start:])
+            block_end = block_start + next_section.start() if next_section else len(resume)
+            block_content = resume[header_start:block_end]
+            if re.search(_late_keywords, block_content):
+                resume = resume[:m.start()] + f"({latest_company} | {latest_start}-{m.group(1)})" + resume[m.end():]
+
+    # 当前公司抬头：强制修正为配置的正确职位（源文档一致）
+    # 格式1：### 公司名 | 错误职位
+    if latest_company:
+        _wrong_title = getattr(settings, "RESUME_WRONG_TITLE", "")  # e.g. "全栈工程师"
+        _correct_title = getattr(settings, "RESUME_CORRECT_TITLE", "")  # e.g. "高级全栈工程师"
+        if _wrong_title and _correct_title:
+            resume = re.sub(
+                rf"(### {re.escape(latest_company)}[^|]*)\| {re.escape(_wrong_title)}",
+                rf"\1| {_correct_title}",
+                resume,
+            )
+    # 格式2：**错误职位 | YYYY.MM - YYYY.MM**（加粗变体）
+    if _wrong_title and _correct_title:
+        resume = re.sub(
+            rf"\*\*{re.escape(_wrong_title)} \| (\d{{4}}\.\d{{2}} - (?:至今|\d{{4}}\.\d{{2}}))\*\*",
+            rf"**{_correct_title} | \1**",
+            resume,
+        )
+
+    # 已知幻觉数字清理：LLM 编造但源文档不存在的数据（从配置读取）
+    _hallucinated = getattr(settings, "RESUME_HALLUCINATIONS", "").split("|") if getattr(settings, "RESUME_HALLUCINATIONS", "") else []
+    for _h in _hallucinated:
+        while _h in resume:
+            # 删除该模式及其后面的逗号/顿号/空格/的
+            idx = resume.find(_h)
+            end = idx + len(_h)
+            if end < len(resume) and resume[end] in ("、", "，", ","):
+                end += 1
+            elif end < len(resume) and resume[end] == " ":
+                end += 1
+            elif resume[end:end+1] == "的":
+                end += 1
+            resume = resume[:idx] + resume[end:]
+        # 清理残留：删除后可能产生的「覆盖 」→「覆盖」(空格多余)或 「、」(开头残留顿号)
+        resume = re.sub(r"覆盖\s+、", "覆盖、", resume)
+        resume = re.sub(r"覆盖\s+，", "覆盖，", resume)
+        # 行首残留的两个空格
+        resume = re.sub(r"\n\s+、", "\n", resume)
+        resume = re.sub(r"\n\s+，", "\n", resume)
+
+    # 3. 重点项目按 (结束年月, 起始年月) 倒序确定性重排（对所有 ### 项目块生效）
+    resume = _reorder_projects_by_date(resume, latest_end, latest_company)
 
     # 4. 求职意向章节补全（如果只有标题没有内容）
     intent_match = re.search(r"(##\s*求职意向\n+)(.*?)(?=\n##\s|\Z)", resume, re.DOTALL)
@@ -211,6 +614,55 @@ def _postprocess_resume(resume: str) -> str:
                 intent_match.group(0),
                 intent_match.group(1) + default_intent + "\n",
             )
+
+    # 5. 求职意向章节：确保各要点独立成行
+    #    Markdown 中连续行（无空行）会被合并为一个段落，导致
+    #    **期望职位** / **工作地点** / **理想方向** 渲染时挤成一行。
+    #    在相邻非空、非标题行之间插入空行，使每条独立成段、渲染分行。
+    intent_match = re.search(r"(##\s*求职意向\n+)(.*?)(?=\n##\s|\Z)", resume, re.DOTALL)
+    if intent_match:
+        body = intent_match.group(2)
+        lines = body.split("\n")
+        new_lines = []
+        for i, ln in enumerate(lines):
+            new_lines.append(ln)
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            if ln.strip() and not ln.strip().startswith("#") and nxt.strip() and not nxt.strip().startswith("#"):
+                new_lines.append("")
+        fixed = intent_match.group(1) + "\n".join(new_lines)
+        resume = resume.replace(intent_match.group(0), fixed)
+
+    # 6. 跨章节确定性去重：删除「工作经历」中与「重点项目」逐字/高度相似的要点
+    #    保留更详细的「重点项目」版本，避免依赖 LLM 重试仍残留重复。
+    def _norm(b: str) -> str:
+        return re.sub(r"\s+", "", b)
+
+    work_m = re.search(r"##\s*工作经历(.*?)(?=\n##\s|\Z)", resume, re.DOTALL)
+    proj_m = re.search(r"##\s*重点项目(.*?)(?=\n##\s|\Z)", resume, re.DOTALL)
+    if work_m and proj_m:
+        proj_bullets = [
+            _norm(ln.strip()[2:].strip())
+            for ln in proj_m.group(1).splitlines()
+            if ln.strip().startswith("- ") and len(_norm(ln.strip()[2:].strip())) >= 10
+        ]
+        work_lines = work_m.group(1).split("\n")
+        out_lines = []
+        for ln in work_lines:
+            if ln.strip().startswith("- "):
+                wb = _norm(ln.strip()[2:].strip())
+                if len(wb) >= 10 and any(
+                    wb == pb or difflib.SequenceMatcher(None, wb, pb).ratio() >= 0.82
+                    for pb in proj_bullets
+                ):
+                    continue  # 与重点项目重复 → 删除（保留项目版）
+            out_lines.append(ln)
+        # 折叠连续空行
+        collapsed = []
+        for ln in out_lines:
+            if collapsed and not collapsed[-1].strip() and not ln.strip():
+                continue
+            collapsed.append(ln)
+        resume = resume[: work_m.start(1)] + "\n".join(collapsed) + resume[work_m.end(1):]
 
     return resume
 
@@ -265,6 +717,52 @@ def _verify_resume(resume: str, rag_context: str) -> tuple[list, list]:
                 ok.append(f"量化数据 {q} 在源文档中模糊匹配到（金额后缀差异）")
             else:
                 bad.append(f"量化数据 {q} 未在源文档中找到，可能编造")
+
+    # 2b. 检查工期/时长表述（天/周/月）是否在源文档中出现
+    #     避免 LLM 编造具体工期（如「为期 12 天的 POC 项目」），这类跨度单位不在量化正则内
+    dur_pattern = r"\d+(?:\.\d+)?\s*(?:天|周|个月|月)"
+    resume_durs = re.findall(dur_pattern, resume)
+    context_dur_norms = [c.replace(" ", "") for c in re.findall(dur_pattern, rag_context)]
+    for d in resume_durs:
+        if d.replace(" ", "") in context_dur_norms:
+            ok.append(f"工期表述 {d} 在源文档中存在")
+        else:
+            bad.append(f"工期表述 {d} 未在源文档中找到，可能虚构（如编造的项目周期）")
+
+    # 2c. 跨章节重复检测：「工作经历」与「重点项目」的要点不得重复
+    #     程序化兜底（LLM 自评不可靠）：抽取两章节的 - 要点，归一化后比对
+    #     逐字相同直接判重；高度相似（difflib 相似度 ≥ 0.82）也判重，触发重试闭环
+    def _section_bullets(text: str, header: str) -> list[str]:
+        m = re.search(rf"##\s*{header}(.*?)(?=\n##\s|\Z)", text, re.DOTALL)
+        if not m:
+            return []
+        return [ln.strip()[2:].strip() for ln in m.group(1).splitlines() if ln.strip().startswith("- ")]
+
+    def _norm_bullet(b: str) -> str:
+        return re.sub(r"\s+", "", b)
+
+    work_bullets = _section_bullets(resume, "工作经历")
+    proj_bullets = _section_bullets(resume, "重点项目")
+    for wb in work_bullets:
+        wn = _norm_bullet(wb)
+        if len(wn) < 10:
+            continue
+        for pb in proj_bullets:
+            pn = _norm_bullet(pb)
+            if len(pn) < 10:
+                continue
+            if wn == pn:
+                bad.append(f"工作经历与重点项目重复要点（逐字）: {wb}")
+                break
+            if difflib.SequenceMatcher(None, wn, pn).ratio() >= 0.82:
+                bad.append(f"工作经历与重点项目存在高度相似要点（相似度高）: 工作经历「{wb}」≈ 重点项目「{pb}」")
+                break
+
+    # 2d. 已知幻觉数据检测：源文档不存在的编造数字/表述
+    _hallucinated = ["13 个电商平台", "13 平台", "57 个文档字段", "57 个字段"]
+    for _h in _hallucinated:
+        if _h in resume:
+            bad.append(f"已知幻觉数据「{_h}」出现在简历中，该表述不在任何源文档中，必须删除")
 
     # 3. 基本长度检查
     if len(resume) < 200:
@@ -369,12 +867,15 @@ def _verify_resume(resume: str, rag_context: str) -> tuple[list, list]:
 
 
 def _verify_state(state: dict) -> tuple[list, list]:
-    # 事实来源：resume_source + rag_context 合并（RAG 检索到的文档也是有效出处）
+    # 事实来源：scan_result（完整语料）> resume_source > rag_context 合并，均为有效出处
     task_input = state.get("task_input", "")
     rag_context = state.get("task_data", {}).get("rag_context", "") or state.get("rag_context", "")
     resume_source = state.get("task_data", {}).get("resume_source", "")
-    # 合并简历全文 + RAG 上下文作为完整的事实来源
+    scan_result = state.get("task_data", {}).get("scan_result", "")
+    # 合并完整事实语料 + 简历全文 + RAG 上下文作为事实来源
     parts = []
+    if scan_result:
+        parts.append(scan_result)
     if resume_source:
         parts.append(resume_source)
     if rag_context:
@@ -396,7 +897,7 @@ def _build_index(docs_dir: Path, subdirs: list[str], index_cache_dir: Path,
     Returns:
         retriever 或 None
     """
-    from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext, load_index_from_storage
+    from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext, load_index_from_storage, Document
     from llama_index.core.node_parser import SentenceSplitter
 
     # 收集文件
@@ -433,6 +934,13 @@ def _build_index(docs_dir: Path, subdirs: list[str], index_cache_dir: Path,
             print(f"   ⚠️ 分区 [{label}] 加载 0 个文档片段")
             return None
 
+        # 手术式脱敏：构建索引前遮蔽直接个人标识符（源文件不改动）。
+        # 注意：本版本 llama-index 的 Document.text 为只读属性，需重建对象。
+        documents = [
+            Document(text=redact(d.text), metadata=getattr(d, "metadata", None), id_=getattr(d, "id_", None))
+            for d in documents
+        ]
+
         splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
         index = VectorStoreIndex.from_documents(documents, transformations=[splitter])
         retriever = index.as_retriever(similarity_top_k=top_k)
@@ -450,7 +958,9 @@ def _build_index(docs_dir: Path, subdirs: list[str], index_cache_dir: Path,
 # resume_source: 简历事实来源（Specialist 用）
 RESUME_PARTITIONS = ["resume2026ppcnlean-v2", "resume-fragments"]
 # market_intel: 面试/JD/工作细节情报（Planner 用）
-MARKET_PARTITIONS = ["interview", "interview2026", "jd", "paypal", "work", "technical", "linkedin"]
+# 注意：目录名须与 work/docs 下真实目录一致。原 interview/interview2026/jd/linkedin
+# 在整理时已重组进 jobs/（JD+面试）、resume-story/（面试准备/求职策略），故此处对齐。
+MARKET_PARTITIONS = ["jobs", "technical", "paypal", "work", "resume-story"]
 
 
 async def main():
@@ -534,6 +1044,25 @@ async def main():
         resume_full_for_verify = resume_src.read_text(encoding="utf-8")
         print(f"   📄 核心简历已加载（供校验用）: {resume_src.name} ({len(resume_full_for_verify)} 字)")
 
+    # 事实核查完整语料：覆盖 resume2026ppcnlean-v2 / paypal / work / resume-fragments 分区（递归）。
+    # 作为 Evaluator / Fix 的"真实数据"(scan_result)：
+    #  - resume2026ppcnlean-v2 是简历源本身，纳入后能直接核对生成简历与源简历的逐字一致性
+    #    （如"30+ 次生产发布"被写成"10+"这类偏差可被捕获）；
+    #  - paypal / work / resume-fragments 提供补充事实，避免 LLM 评审把真实事实误判为幻觉。
+    verify_corpus_parts = ["resume2026ppcnlean-v2", "paypal", "work", "resume-fragments"]
+    _corpus_chunks = []
+    for _p in verify_corpus_parts:
+        _pd = docs_dir / _p
+        if _pd.exists():
+            for _f in sorted(_pd.rglob("*")):
+                if _f.is_file() and not _f.name.startswith(".") and _f.suffix in (".md", ".txt"):
+                    try:
+                        _corpus_chunks.append(_f.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+    verify_corpus = "\n\n".join(_corpus_chunks)
+    print(f"   📚 事实核查语料已构建: {len(_corpus_chunks)} 个文件, {len(verify_corpus)} 字")
+
     # 构建 PSE workflow
     max_retries = settings.PSE_MAX_RETRIES or 3
 
@@ -551,9 +1080,11 @@ async def main():
         # ── 自由推荐模式 ──
         # 加载推荐模式的专用提示词
         prompts_dir = BASE / "prompts"
-        planner_prompt = (prompts_dir / "recommend_planner.md").read_text(encoding="utf-8")
-        specialist_prompt = (prompts_dir / "recommend_specialist.md").read_text(encoding="utf-8")
-        evaluator_prompt = (prompts_dir / "evaluator.md").read_text(encoding="utf-8")
+        # 提示词同样可能含真实标识符（如 recommend_specialist.md 的 GitHub 链接），
+        # 发往外部 LLM 前先脱敏；最终落盘由 finalize() 从本地配置回填。
+        planner_prompt = redact(_substitute((prompts_dir / "recommend_planner.md").read_text(encoding="utf-8")))
+        specialist_prompt = redact(_substitute((prompts_dir / "recommend_specialist.md").read_text(encoding="utf-8")))
+        evaluator_prompt = redact(_substitute((prompts_dir / "evaluator.md").read_text(encoding="utf-8")))
 
         workflow = build_workflow(
             llm=llm,
@@ -578,13 +1109,13 @@ async def main():
             "推荐最适合我的岗位方向，并为排名第一的岗位定制简历。\n\n"
         )
         if resume_full_for_verify:
-            task_input += f"## 我的完整简历（以下为事实来源，必须基于此撰写）\n\n{resume_full_for_verify}\n\n"
+            task_input += f"## 我的完整简历（以下为事实来源，必须基于此撰写）\n\n{redact(resume_full_for_verify)}\n\n"
 
         # 注入个人特点文档（直接读取，不依赖 RAG 检索）
         personal_docs_dir = docs_dir / "work"
         if personal_docs_dir.exists():
             personal_parts = []
-            for p in sorted(personal_docs_dir.glob("*.md")):
+            for p in sorted(personal_docs_dir.rglob("*.md")):
                 if p.name.startswith("."):
                     continue
                 content = p.read_text(encoding="utf-8").strip()
@@ -592,7 +1123,7 @@ async def main():
                     # 截取前 2000 字避免过长
                     if len(content) > 2000:
                         content = content[:2000] + "\n...(截断)"
-                    personal_parts.append(f"### {p.stem}\n\n{content}")
+                    personal_parts.append(f"### {p.stem}\n\n{redact(content)}")
             if personal_parts:
                 task_input += (
                     "## 个人特点与职业发展（以下为辅助参考，丰富简历内容）\n\n"
@@ -615,18 +1146,32 @@ async def main():
                 f"检索关键词：{rag_keywords}\n"
             )
 
+        target_role = settings.RESUME_TARGET_ROLE
+        if target_role:
+            task_input += (
+                "## 目标岗位（固定，必须严格遵守）\n"
+                f"本次简历的目标岗位固定为：{target_role}\n"
+                "简历大标题（# 姓名 | 目标岗位）与文末「求职意向·期望职位」必须严格使用该称谓，"
+                "不得改写为架构师 / 专家 / 负责人 / 工程师 等其他词。\n\n"
+            )
+            print(f"   🎯 目标岗位已固定: {target_role}")
+
         print(f"\n🚀 自由推荐模式 (provider={args.provider}, max_retries={max_retries})")
         print(f"   RAG 分区: Planner→市场情报, Specialist→简历源数据")
         handler = workflow.run(
             task_input=task_input,
-            task_data={"resume_source": resume_full_for_verify},
+            task_data={"resume_source": resume_full_for_verify, "scan_result": verify_corpus},
             max_retries=max_retries,
         )
         result = await handler
 
         artifact = result.get("artifact", "")
-        artifact = _postprocess_resume(artifact)
-        out_path = BASE / "recommended_resume.md"
+        artifact = _postprocess_resume(artifact, resume_full_for_verify)
+        artifact = finalize(artifact)
+        artifact = _normalize_github_links(artifact)  # 兜底：finalize 注入的段落也可能含破损链接
+        if is_recommend and settings.RESUME_TARGET_ROLE:
+            artifact = _apply_target_role(artifact, settings.RESUME_TARGET_ROLE)
+        out_path = BASE / f"recommended_resume_{args.provider}.md"
         out_path.write_text(artifact, encoding="utf-8")
         print(f"\n✅ 推荐简历已保存 → {out_path}")
 
@@ -648,20 +1193,20 @@ async def main():
         # task_input: 简历全文注入（事实基础）+ 个人特点注入
         task_input = f"请根据以下 JD 定制简历：\n\n## 岗位描述\n{jd_text}\n\n"
         if resume_full_for_verify:
-            task_input += f"## 我的完整简历（以下为事实来源，必须基于此撰写）\n\n{resume_full_for_verify}\n\n"
+            task_input += f"## 我的完整简历（以下为事实来源，必须基于此撰写）\n\n{redact(resume_full_for_verify)}\n\n"
 
         # 注入个人特点文档（直接读取，不依赖 RAG 检索）
         personal_docs_dir = docs_dir / "work"
         if personal_docs_dir.exists():
             personal_parts = []
-            for p in sorted(personal_docs_dir.glob("*.md")):
+            for p in sorted(personal_docs_dir.rglob("*.md")):
                 if p.name.startswith("."):
                     continue
                 content = p.read_text(encoding="utf-8").strip()
                 if content:
                     if len(content) > 2000:
                         content = content[:2000] + "\n...(截断)"
-                    personal_parts.append(f"### {p.stem}\n\n{content}")
+                    personal_parts.append(f"### {p.stem}\n\n{redact(content)}")
             if personal_parts:
                 task_input += (
                     "## 个人特点与职业发展（以下为辅助参考，丰富简历内容）\n\n"
@@ -681,14 +1226,16 @@ async def main():
         print(f"   RAG 分区: Planner→市场情报, Specialist→简历源数据")
         handler = workflow.run(
             task_input=task_input,
-            task_data={"resume_source": resume_full_for_verify},
+            task_data={"resume_source": resume_full_for_verify, "scan_result": verify_corpus},
             max_retries=max_retries,
         )
         result = await handler
 
         resume = result.get("artifact", "")
-        resume = _postprocess_resume(resume)
-        out_path = BASE / "tailored_resume.md"
+        resume = _postprocess_resume(resume, resume_full_for_verify)
+        resume = finalize(resume)
+        resume = _normalize_github_links(resume)  # 兜底：finalize 注入的段落也可能含破损链接
+        out_path = BASE / f"tailored_resume_{args.provider}.md"
         out_path.write_text(resume, encoding="utf-8")
         print(f"\n✅ 定制简历已保存 → {out_path}")
 

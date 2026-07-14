@@ -26,4 +26,4 @@
 
 ## 开源项目
 
-从 personal-strengths-opensource.md 片段中选择与推荐岗位最相关的 4-5 个。
+从 personal-strengths-opensource.md 片段中选择与推荐岗位最相关的 4-6 个。

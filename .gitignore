@@ -4,12 +4,15 @@ __pycache__
 outputs/
 .venv
 
-# 生成的简历（含个人信息，禁止入库）
-tailored_resume.md
-recommended_resume.md
+# 生成的简历（含个人信息，禁止入库；按模型 provider 区分文件名）
+tailored_resume_*.md
+recommended_resume_*.md
 
-# 含个人隐私的 prompt 文件（公司名/项目时间/GitHub 等）
+# 含个人隐私的 prompt 文件（公司名/项目时间/GitHub/指标等）
 tasks/*/prompts/recommend_specialist.md
 
 # Embedding 索引缓存（可本地重建，不入库）
 .index_cache/
+
+# 脱敏规则（含真实标识符，本地生效，禁止入库）
+tasks/*/privacy_patterns.json
