@@ -86,8 +86,8 @@ def _apply_target_role(text: str, role: str) -> str:
     兼容 DeepSeek 格式（# 姓名 | 岗位）和 Agnes 格式（# 姓名 - 岗位/岗位）。
     """
     # 大标题：匹配 # 姓名 <分隔符> 任意岗位 两种变体
-    #   DeepSeek: # 孙磊 | AI 工程师
-    #   Agnes:    # 孙磊 - AI 工程化工程师 / LLM 应用工程师
+    #   DeepSeek: # ［姓名］ | AI 工程师
+    #   Agnes:    # ［姓名］ - AI 工程化工程师 / LLM 应用工程师
     # 用 [^|\n-]+ 吃姓名（不含 | 和 -），再用 [|\-] 匹配分隔符
     text = re.sub(
         r"^(#\s[^|\n-]+)[|\-].*$",

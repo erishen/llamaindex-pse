@@ -164,6 +164,15 @@ This project runs as a local CLI, but it is **not** air-gapped: it transmits you
 
 If your input contains PII (e.g. a résumé with real employers, dates, contact info, or private repo names), that PII leaves your machine. The only way to avoid third-party transfer is to **self-host the models** (local LLM + local embedding).
 
+**Runtime redaction (default on).** Before any prompt leaves for the external LLM/Embedding API, `tasks/resume-tailor/privacy.py` masks *direct* personal identifiers — real name, corporate / personal email, phone number, personal website, and GitHub handle — while keeping the résumé's substantive content (employers, projects, tech stack, dates) intact, since that content is required for generation and is not directly identifying.
+
+- **Rules are local & gitignored.** Patterns load from `privacy_patterns.json` (or the `RESUME_REDACT` env var). That file is gitignored and holds the *real* identifiers, so it never reaches version control. A PII-free template ships as `privacy_patterns.example.json`.
+- **Fail-safe, not silent.** Controlled by `RESUME_DESENSITIZE` (default `true`). If redaction is enabled yet no rules load (fresh clone / CI missing the file *and* env var), the tool emits **one explicit stderr warning** rather than silently sending plaintext; set `RESUME_REDACT_STRICT=true` to abort instead.
+- **Local-only restore.** A `finalize()` step re-injects real values *only* into the on-disk output and builds the GitHub-backed "Open Source" section from local config — restored text is never sent back to the API.
+- **Verification uses raw data.** The local `verify_fn` still fact-checks against the *original* résumé, so redaction does not weaken correctness.
+
+Redaction **reduces** PII egress but does not eliminate it (substantive context can still be identifying). Self-hosting the models remains the only zero-transfer option.
+
 Local plaintext residues (present even without any API call):
 - Task prompts under `tasks/<task>/prompts/*.md` may contain real PII — `tasks/*/prompts/recommend_specialist.md` is gitignored for this reason.
 - Generated outputs (`tailored_resume.md`, `recommended_resume.md`) and `.index_cache/` are gitignored but stored unencrypted on disk.
@@ -186,6 +195,7 @@ The distinctive edge here is RAG: siblings *detect-and-repair* hallucinations af
 
 - **No hardcoded secrets.** All credentials are read from `.env`, which is gitignored.
 - **Sandboxed tools.** `read_file` only reads under `PSE_ROOT`; `run_bash` blocks destructive commands (`rm -rf`, `dd`, `curl|sh`, …) and runs in `PSE_ROOT`.
+- **Runtime PII redaction.** Outgoing prompts are masked via `tasks/resume-tailor/privacy.py` before reaching the LLM/Embedding API; rules come from a gitignored `privacy_patterns.json` — see [Data Flow & Privacy](#data-flow--privacy).
 - **Local process, external data.** The CLI itself is not network-exposed, but it sends data to the LLM/Embedding providers above — see [Data Flow & Privacy](#data-flow--privacy).
 
 ## License
