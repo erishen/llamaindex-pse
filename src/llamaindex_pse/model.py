@@ -1,8 +1,10 @@
 """LLM / Embedding 客户端 — 直接用 openai SDK 绕开 LlamaIndex 枚举校验。
 
-LLM 支持两种 provider（均 OpenAI 兼容协议）：
+LLM 支持多种 provider（均 OpenAI 兼容协议）：
   - "deepseek"（默认）：用 OPENAI_* 变量
   - "agnes"：用 AGNES_* 变量
+  - "scnet-kimi"：用 SCNET_* 变量 + SCNET_KIMI_MODEL（Kimi-K2.6）
+  - "scnet-minimax"：用 SCNET_* 变量 + SCNET_MINIMAX_MODEL（MiniMax-M2.5）
 
 LlamaIndex 的 OpenAI LLM 封装在 metadata 属性中调用
 openai_modelname_to_contextsize()，对非 OpenAI 官方模型（deepseek-chat、
@@ -159,13 +161,23 @@ class SimpleLLM:
 def create_llm(provider: str = "deepseek") -> SimpleLLM:
     """创建 OpenAI 兼容 LLM。
 
-    provider: "deepseek" | "agnes"
+    provider: "deepseek" | "agnes" | "scnet-kimi" | "scnet-minimax"
     """
     if provider == "agnes":
         api_key = settings.AGNES_KEY
         base_url = settings.AGNES_BASE_URL
         model = settings.AGNES_MODEL
         label = "AGNES"
+    elif provider == "scnet-kimi":
+        api_key = settings.SCNET_KEY
+        base_url = settings.SCNET_BASE_URL
+        model = settings.SCNET_KIMI_MODEL
+        label = "SCNET (Kimi)"
+    elif provider == "scnet-minimax":
+        api_key = settings.SCNET_KEY
+        base_url = settings.SCNET_BASE_URL
+        model = settings.SCNET_MINIMAX_MODEL
+        label = "SCNET (MiniMax)"
     else:
         api_key = settings.OPENAI_API_KEY
         base_url = settings.OPENAI_BASE_URL

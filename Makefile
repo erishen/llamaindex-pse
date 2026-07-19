@@ -1,4 +1,4 @@
-.PHONY: install lint clean resume-tailor resume-tailor-agnes resume-recommend resume-recommend-agnes resume-tailor-rebuild resume-tailor-rebuild-agnes help
+.PHONY: install lint clean resume-tailor resume-tailor-agnes resume-tailor-scnet-kimi resume-tailor-scnet-minimax resume-recommend resume-recommend-agnes resume-recommend-scnet-kimi resume-recommend-scnet-minimax resume-tailor-rebuild resume-tailor-rebuild-agnes resume-tailor-rebuild-scnet-kimi resume-tailor-rebuild-scnet-minimax help
 
 PY := uv run python
 
@@ -29,6 +29,19 @@ resume-recommend: ## 自由推荐模式 - deepseek（无需 JD）
 resume-recommend-agnes: ## 自由推荐模式 - agnes（无需 JD）
 	$(PY) tasks/resume-tailor/run.py --recommend --provider agnes $(if $(DOCS),--docs $(DOCS),)
 
+# ── SCNet 模式（Kimi / MiniMax，需 .env 中 SCNET_* 配置）──
+resume-recommend-scnet-kimi: ## 自由推荐模式 - SCNet Kimi（无需 JD）
+	$(PY) tasks/resume-tailor/run.py --recommend --provider scnet-kimi $(if $(DOCS),--docs $(DOCS),)
+
+resume-recommend-scnet-minimax: ## 自由推荐模式 - SCNet MiniMax（无需 JD，推荐）
+	$(PY) tasks/resume-tailor/run.py --recommend --provider scnet-minimax $(if $(DOCS),--docs $(DOCS),)
+
+resume-tailor-scnet-kimi: ## JD 定制模式 - SCNet Kimi（需 JD= 参数）
+	$(PY) tasks/resume-tailor/run.py --jd $(JD) --provider scnet-kimi $(if $(DOCS),--docs $(DOCS),)
+
+resume-tailor-scnet-minimax: ## JD 定制模式 - SCNet MiniMax（需 JD= 参数）
+	$(PY) tasks/resume-tailor/run.py --jd $(JD) --provider scnet-minimax $(if $(DOCS),--docs $(DOCS),)
+
 resume-tailor-rebuild: ## 强制重建分区 embedding 索引 - deepseek
 	rm -rf tasks/resume-tailor/.index_cache/
 	$(PY) tasks/resume-tailor/run.py --recommend --rebuild
@@ -36,6 +49,14 @@ resume-tailor-rebuild: ## 强制重建分区 embedding 索引 - deepseek
 resume-tailor-rebuild-agnes: ## 强制重建分区 embedding 索引 - agnes
 	rm -rf tasks/resume-tailor/.index_cache/
 	$(PY) tasks/resume-tailor/run.py --recommend --rebuild --provider agnes
+
+resume-tailor-rebuild-scnet-kimi: ## 强制重建分区 embedding 索引 - SCNet Kimi
+	rm -rf tasks/resume-tailor/.index_cache/
+	$(PY) tasks/resume-tailor/run.py --recommend --rebuild --provider scnet-kimi
+
+resume-tailor-rebuild-scnet-minimax: ## 强制重建分区 embedding 索引 - SCNet MiniMax
+	rm -rf tasks/resume-tailor/.index_cache/
+	$(PY) tasks/resume-tailor/run.py --recommend --rebuild --provider scnet-minimax
 
 help: ## 列出全部命令
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \

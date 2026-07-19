@@ -141,6 +141,18 @@ def finalize(text: str) -> str:
         if placeholder in text:
             text = text.replace(placeholder, value)
 
+    # 兜底：LLM 偶发把大标题里的姓名占位符写成裸「姓名」（源自结构模板字面、
+    # 未带括号，故未命中上面的 ［姓名］ 还原规则）。在标题位置补还原为真实姓名。
+    # 数据驱动：姓名真实值取自本地 restore_map，不在此硬编码任何 PII。
+    name_val = restore_map.get("［姓名］") or restore_map.get("[姓名]")
+    if name_val:
+        text = re.sub(
+            r"^#\s*姓名\s*([|\-])",
+            lambda m: f"# {name_val} {m.group(1)}",
+            text,
+            flags=re.MULTILINE,
+        )
+
     # 开源项目：仅当文本中「不存在任何开源相关章节」时才从本地权威清单注入
     # （GitHub 用户名本地补全，不外发）。基准简历的开源章节标题为
     # 「## 个人开源与 AI 实验」，必须一并识别，否则会与注入的「## 开源项目」

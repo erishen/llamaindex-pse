@@ -9,6 +9,8 @@
     python run.py --recommend                  # 自由推荐模式（无需 JD）
     python run.py --docs /path/to/docs         # 指定文档目录（默认 work/docs）
     python run.py --provider agnes              # 使用 Agnes 网关
+    python run.py --provider scnet-minimax      # 使用 SCNet MiniMax 网关
+    python run.py --provider scnet-kimi         # 使用 SCNet Kimi 网关
 """
 
 import argparse
@@ -223,7 +225,13 @@ def _ensure_tagline(resume: str) -> str:
 
 # 代表项目在基准简历中的「项目名关键词 → 确认起止区间」映射。
 # 关键词用于匹配生成的 ### 标题（agnes 用「项目名 (公司 | 区间)」、deepseek 用「公司 - 项目名」+ 粗体行两种写法）。
-_PROJECT_KEYWORDS = ["迁移验证", "技术预研", "身份验证", "迪士尼", "营销落地页", "国际站内容平台"]
+_PROJECT_KEYWORDS = ["迁移验证", "身份验证", "迪士尼", "营销落地页", "国际站内容平台"]
+
+# 兜底：基准简历未按纪律列出 CIP（避免稀释 AI 品牌），但 LLM 偶发把 CIP 结束日
+# 从 PayPal 任职 tenure（2026.07）推断，而非真实项目结束日。真值来源为
+# work/docs/resume-fragments/paypal-cip.md（2025.01-2025.12）。此处硬编码兜底，
+# 确保 _normalize_project_dates 即使基准无 CIP 也能正确归一，不受 rebuild 影响。
+_PROJECT_DATE_OVERRIDES = {"身份验证": "2025.01-2025.12"}
 
 
 def _build_project_date_map(base_text: str) -> dict[str, str]:
@@ -238,6 +246,7 @@ def _build_project_date_map(base_text: str) -> dict[str, str]:
         dm = re.match(r"\s*\*\*([\d]{4}(?:\.\d\d)?\s*-\s*[\d]{4}(?:\.\d\d)?)\s*\|", section[hm.end():])
         if dm:
             out[kw] = dm.group(1)
+    out.update(_PROJECT_DATE_OVERRIDES)
     return out
 
 
@@ -328,19 +337,27 @@ def _reorder_projects_by_date(resume: str, latest_end: str = "", latest_company:
 
     排序键 (end_ym, start_ym) 倒序 => 最新结束的排最前；同结束时起始更晚的排更前。
     """
-    # 当前公司"至今"替换为实际离职时间（与历史逻辑一致）
-    if latest_end and latest_company:
+    # 当前公司「至今」替换为实际离职时间（与历史逻辑一致）
+    if latest_end:
+        # 项目标题格式：(公司 | X-至今) —— 仅在 latest_company 能精确匹配时生效
+        if latest_company:
+            resume = re.sub(
+                rf"\({re.escape(latest_company)} \| (\d{{4}}\.\d{{2}})-至今\)",
+                f"({latest_company} | \\1-{latest_end})",
+                resume,
+            )
+        # 公司级标题格式：### 公司 | X-至今（无括号）。标题里的公司名可能是
+        # 「PayPal 贝宝支付」而 latest_company 仅「PayPal」，故不能用精确匹配，
+        # 改为：仅对公司标题含 latest_company 子串的「X-至今」兜底为「X-{latest_end}」
+        # （latest_company 为空时退化为任意 ### 标题，保持通用兜底）。
+        # 已带确定日期的项目块如 CIP(2025.01-2025.12) 不含「至今」，不受影响；
+        # 其结束日由 _normalize_project_dates 的 override 另行兜底。
+        anchor = re.escape(latest_company) if latest_company else r".*?"
         resume = re.sub(
-            rf"\({re.escape(latest_company)} \| (\d{{4}}\.\d{{2}})-至今\)",
-            f"({latest_company} | \\1-{latest_end})",
+            rf"(^###\s+.*?{anchor}.*?\|\s*\d{{4}}\.\d{{2}}\s*[-–—]\s*)至今(?=\s*$|\s*\))",
+            lambda m: m.group(1) + latest_end,
             resume,
-        )
-        resume = re.sub(
-            rf"\({re.escape(latest_company)} \| (\d{{4}}\.\d{{2}})-(\d{{4}}\.\d{{2}})\)",
-            lambda m: f"({latest_company} | {m.group(1)}-{latest_end})"
-            if m.group(2) != latest_end
-            else m.group(0),
-            resume,
+            flags=re.MULTILINE,
         )
 
     def _project_date(seg: str):
@@ -378,8 +395,7 @@ def _reorder_projects_by_date(resume: str, latest_end: str = "", latest_company:
     # （如 CIP 与营销落地页均结束 2025.12）在重排时抖动。关键字按出现优先级
     # 匹配标题，agnes / deepseek 两种标题写法都能命中。
     canonical_order = [
-        "迁移验证",     # AI 支付迁移验证与自动化工程化
-        "预研",         # 个人技术预研 - AI 支付迁移方法论验证
+        "迁移验证",     # AI 支付迁移验证与自动化工程化（已含方法论预研）
         "客户身份验证", # 客户身份验证平台 (CIP)
         "营销",         # 营销落地页平台组件开发
         "迪士尼",       # 迪士尼 AI 数字人客服系统
@@ -501,29 +517,14 @@ def _postprocess_resume(resume: str, base_text: str = "") -> str:
         latest_start = settings.RESUME_LATEST_COMPANY_START
     except Exception:
         latest_end, latest_company, latest_start = "", "", ""
-    if latest_end and latest_company and latest_start:
-        # 工作经历行：*YYYY.MM - 至今* → *YYYY.MM - YYYY.MM*（DeepSeek 斜体）
+    # 当前公司「至今」统一替换为实际离职时间（latest_end）。
+    # 采用「日期区间锚定」正则：凡 "YYYY.MM - 至今" 不论粗体/斜体/括号/职位前缀、
+    # 不论 | 前后有无空格，一律替换为 "YYYY.MM - {latest_end}"。仅匹配真实日期区间，
+    # 不会误伤正文里的「至今」二字。
+    if latest_end:
         resume = re.sub(
-            rf"\*{latest_start} - 至今\*",
-            f"*{latest_start} - {latest_end}*",
-            resume,
-        )
-        # 工作经历行：**YYYY.MM - 至今** → **YYYY.MM - YYYY.MM**（Agnes 加粗）
-        resume = re.sub(
-            rf"\*\*{latest_start} - 至今\*\*",
-            f"**{latest_start} - {latest_end}**",
-            resume,
-        )
-        # 工作经历行：**... | YYYY.MM - 至今** → **... | YYYY.MM - YYYY.MM**（Agnes 职位+日期加粗）
-        resume = re.sub(
-            rf"\*\*[^|]* \| {latest_start} - 至今\*\*",
-            f"**高级全栈工程师 | {latest_start} - {latest_end}**",
-            resume,
-        )
-        # 项目标题中该公司任意起始时间的"至今"：(Company | YYYY.MM-至今        )
-        resume = re.sub(
-            rf"\({re.escape(latest_company)} \| (\d{{4}}\.\d{{2}})-至今\)",
-            f"({latest_company} | \\1-{latest_end})",
+            rf"(\d{{4}}\.\d{{2}}\s*[-–—]\s*)至今",
+            rf"\g<1>{latest_end}",
             resume,
         )
 
@@ -972,8 +973,8 @@ async def main():
     ap.add_argument("--docs", type=str,
                     default=os.getenv("RESUME_DOCS_PATH", ""),
                     help="文档目录路径（默认从 PSE_ROOT/work/docs 加载）")
-    ap.add_argument("--provider", choices=["deepseek", "agnes"], default="deepseek",
-                    help="LLM 网关")
+    ap.add_argument("--provider", choices=["deepseek", "agnes", "scnet-kimi", "scnet-minimax"], default="deepseek",
+                    help="LLM 网关（deepseek / agnes / scnet-kimi / scnet-minimax）")
     ap.add_argument("--top-k", type=int, default=8,
                     help="RAG 检索 top-k 文档数（默认 8）")
     ap.add_argument("--rebuild", action="store_true",

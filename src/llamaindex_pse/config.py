@@ -19,6 +19,11 @@ class Settings:
     AGNES_KEY: str = os.getenv("AGNES_KEY", "")
     AGNES_BASE_URL: str = os.getenv("AGNES_BASE_URL", "")
     AGNES_MODEL: str = os.getenv("AGNES_MODEL", "")
+    # SCNet 网关（Kimi / MiniMax，OpenAI 兼容协议，独立 key / base_url / 模型）
+    SCNET_KEY: str = os.getenv("SCNET_KEY", "")
+    SCNET_BASE_URL: str = os.getenv("SCNET_BASE_URL", "")
+    SCNET_KIMI_MODEL: str = os.getenv("SCNET_KIMI_MODEL", "")
+    SCNET_MINIMAX_MODEL: str = os.getenv("SCNET_MINIMAX_MODEL", "")
     # Embedding 模型（RAG 索引用）
     EMBEDDING_PROVIDER: str = os.getenv("EMBEDDING_PROVIDER", "openai")  # "openai" | "ollama"
     EMBEDDING_API_KEY: str = os.getenv("EMBEDDING_API_KEY", os.getenv("OPENAI_API_KEY", ""))
