@@ -195,6 +195,4 @@ MIT
 ---
 
 ## 相关文章
-
-- 中文: [LlamaIndex PSE：RAG 工作流](https://erishen.cn/llamaindex-pse-rag-workflow/)
-- English: [LlamaIndex PSE: RAG Workflow](https://erishen.cn/llamaindex-pse-rag-workflow-en/)
+- [让智能体从源头不说谎：用 LlamaIndex Workflow 构建 RAG 接地的 PSE 多智能体框架](https://erishen.cn/llamaindex-pse-rag-workflow/)
