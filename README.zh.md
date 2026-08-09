@@ -191,3 +191,10 @@ result = asyncio.run(workflow.run(
 ## 许可证
 
 MIT
+
+---
+
+## 相关文章
+
+- 中文: [LlamaIndex PSE：RAG 工作流](https://erishen.cn/llamaindex-pse-rag-workflow/)
+- English: [LlamaIndex PSE: RAG Workflow](https://erishen.cn/llamaindex-pse-rag-workflow-en/)

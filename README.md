@@ -198,6 +198,13 @@ The distinctive edge here is RAG: siblings *detect-and-repair* hallucinations af
 - **Runtime PII redaction.** Outgoing prompts are masked via `tasks/resume-tailor/privacy.py` before reaching the LLM/Embedding API; rules come from a gitignored `privacy_patterns.json` — see [Data Flow & Privacy](#data-flow--privacy).
 - **Local process, external data.** The CLI itself is not network-exposed, but it sends data to the LLM/Embedding providers above — see [Data Flow & Privacy](#data-flow--privacy).
 
+---
+
+## Related Articles
+
+- English: [LlamaIndex PSE: RAG Workflow](https://erishen.cn/llamaindex-pse-rag-workflow-en/)
+- 中文: [LlamaIndex PSE：RAG 工作流](https://erishen.cn/llamaindex-pse-rag-workflow/)
+
 ## License
 
 MIT
