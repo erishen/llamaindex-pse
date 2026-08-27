@@ -16,3 +16,4 @@ tasks/*/prompts/recommend_specialist.md
 
 # 脱敏规则（含真实标识符，本地生效，禁止入库）
 tasks/*/privacy_patterns.json
+.serena
