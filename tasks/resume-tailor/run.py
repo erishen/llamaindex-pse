@@ -973,8 +973,8 @@ async def main():
     ap.add_argument("--docs", type=str,
                     default=os.getenv("RESUME_DOCS_PATH", ""),
                     help="文档目录路径（默认从 PSE_ROOT/work/docs 加载）")
-    ap.add_argument("--provider", choices=["deepseek", "agnes", "scnet-kimi", "scnet-minimax"], default="deepseek",
-                    help="LLM 网关（deepseek / agnes / scnet-kimi / scnet-minimax）")
+    ap.add_argument("--provider", choices=["deepseek", "agnes", "scnet-kimi", "scnet-minimax"], default="agnes",
+                    help="LLM 网关（agnes 默认 / deepseek / scnet-kimi / scnet-minimax）")
     ap.add_argument("--top-k", type=int, default=8,
                     help="RAG 检索 top-k 文档数（默认 8）")
     ap.add_argument("--rebuild", action="store_true",

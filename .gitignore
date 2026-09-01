@@ -17,3 +17,11 @@ tasks/*/prompts/recommend_specialist.md
 # 脱敏规则（含真实标识符，本地生效，禁止入库）
 tasks/*/privacy_patterns.json
 .serena
+
+# ── hot-news 任务：本地生成/敏感的产物不入库 ──
+# 抓取到的第三方新闻原文快照（受版权保护、可再抓取）：不入库
+tasks/hot-news/news/
+# 已生成的文章成稿（带时间戳、可再生成）：不入库
+tasks/hot-news/articles/
+# 发布器（Playwright 平台自动化/风控绕过脚本）+ 登录态 + 品牌图：整体不入库
+tasks/hot-news/publish/

@@ -35,6 +35,20 @@ from .prompts import load_prompt
 from .tools import TOOLS
 
 
+# 缺省 Fix 规则（legacy）：简历场景专用。任务提供 prompts/fix.md 时优先使用，
+# 未提供则回退到该简历规则，保证 resume-tailor 等既有任务行为不变。
+_LEGACY_RESUME_FIX_RULES = """以下产物被程序化核查发现问题，请修正。
+
+**规则**:
+1. 仅修正问题清单中指出的错误，将错误数字改为真实数据中的正确值
+2. 不要删除任何正确的数字或内容，保持其余部分不变
+3. **绝对禁止删除整段工作经历或项目经历**——如果某段经历的数据有误，修正数据而非删除整段
+4. **绝对禁止将经历替换为占位符或注释**（如'注：源文档未提供'）——应基于真实数据修正
+5. 如果问题清单提到'20年'等年限表述：**直接删除**该年限表述，不要替换为其他年份数字
+6. 如果问题清单提到项目缺少起止时间：在项目标题的公司名后追加`| YYYY.MM-YYYY.MM`格式的时间范围，时间从该公司的任职期间推断
+7. 输出修正后的完整产物，不输出解释"""
+
+
 # ─────────────────────── 状态模型 ───────────────────────
 
 @dataclass
@@ -127,7 +141,7 @@ class PSEWorkflow(Workflow):
         verify_fn: Optional[Callable] = None,
         max_retries: int = 3,
         use_planner: bool = True,
-        provider: str = "deepseek",
+        provider: str = "agnes",
         retriever=None,
         planner_retriever=None,
         rag_top_k: int = 5,
@@ -150,6 +164,8 @@ class PSEWorkflow(Workflow):
         self._planner_prompt = load_prompt("planner", task) if use_planner else ""
         self._specialist_prompt = load_prompt("specialist", task)
         self._evaluator_prompt = load_prompt("evaluator", task)
+        # Fix 规则可任务级定制（prompts/fix.md）；缺省回退到简历场景 legacy 规则
+        self._fix_prompt = load_prompt("fix", task)
 
     @step
     async def start_node(self, ctx: Context, ev: StartEvent) -> PlannerEvent | SpecialistEvent:
@@ -301,37 +317,46 @@ class PSEWorkflow(Workflow):
 
     @step
     async def fix(self, ctx: Context, ev: FixEvent) -> EvaluatorEvent:
-        """Fix：按核查出的问题修正产物。RAG 上下文注入修正提示，防止凭空编造。"""
-        state: PSEState = await ctx.store.get("state")
-        scan = state.task_data.get("scan_result", {})
-        scan_str = json.dumps(scan, ensure_ascii=False, indent=2)
+        """Fix：按核查出的问题修正产物。
 
-        # RAG 上下文：修正时也基于检索到的真实文档
-        rag_section = ""
+        事实基准三层递进，谁有就用谁（都注入防凭空编造）：
+          1. 任务注入的结构化 scan_result（简历等）
+          2. 新闻原文语料 news_corpus 节选（hot-news 等 RAG 任务）
+          3. RAG 参考文档 rag_context
+        修正规则：任务提供 prompts/fix.md 则用之，否则回退 legacy 简历规则。
+        """
+        state: PSEState = await ctx.store.get("state")
+
+        facts_sections: list[str] = []
+        scan = state.task_data.get("scan_result", {}) or {}
+        if scan:
+            facts_sections.append(
+                "**真实数据（修正时必须以此为准，把错误数字改为真实值，"
+                "不得编造也不得删除数字）**:\n"
+                + json.dumps(scan, ensure_ascii=False, indent=2)
+            )
+        news_corpus = (state.task_data.get("news_corpus") or "").strip()
+        if news_corpus:
+            facts_sections.append(
+                "**新闻原文语料（事实对照基准，节选）：新增或保留的所有具体"
+                "数字/日期/人名/机构名/事件，必须在其中能找到原文出处；"
+                "找不到依据的断言应删除或改用原文表述，绝不编造替代数字**:\n"
+                + news_corpus[:4000]
+            )
         if state.rag_context:
-            rag_section = (
-                "\n\n**RAG 参考文档（修正时必须以此为准）**:\n"
-                f"{state.rag_context}\n"
+            facts_sections.append(
+                "**RAG 参考文档（修正时必须以此为准）**:\n" + state.rag_context
             )
 
         print("  🔄 自动修正中...")
         prompt = (
-            "以下产物被程序化核查发现问题，请修正。\n\n"
-            f"**问题清单（必须修复）**:\n" + "\n".join(f"- {i}" for i in ev.issues) + "\n\n"
-            "**真实数据（修正时必须以此为准，把错误数字改为真实值，"
-            "不得编造也不得删除数字）**:\n"
-            f"{scan_str}\n"
-            f"{rag_section}\n"
-            "**规则**:\n"
-            "1. 仅修正问题清单中指出的错误，将错误数字改为真实数据中的正确值\n"
-            "2. 不要删除任何正确的数字或内容，保持其余部分不变\n"
-            "3. **绝对禁止删除整段工作经历或项目经历**——如果某段经历的数据有误，修正数据而非删除整段\n"
-            "4. **绝对禁止将经历替换为占位符或注释**（如'注：源文档未提供'）——应基于真实数据修正\n"
-            "5. 如果问题清单提到'20年'等年限表述：**直接删除**该年限表述，不要替换为其他年份数字\n"
-            "6. 如果问题清单提到项目缺少起止时间：在项目标题的公司名后追加`| YYYY.MM-YYYY.MM`格式的时间范围，"
-            "时间从该公司的任职期间推断\n"
-            "7. 输出修正后的完整产物，不输出解释\n\n"
-            f"## 当前产物\n{ev.artifact}"
+            (self._fix_prompt or _LEGACY_RESUME_FIX_RULES).strip()
+            + "\n\n**问题清单（必须修复）**:\n"
+            + "\n".join(f"- {i}" for i in ev.issues)
+            + "\n\n"
+            + "\n\n".join(facts_sections)
+            + "\n\n## 当前产物\n"
+            + ev.artifact
         )
         resp = self._llm.complete(prompt, stage="fix")
         fixed = str(resp)
@@ -377,7 +402,7 @@ def build_workflow(
     tools:            注入 agent 的工具列表（默认 read_file + run_bash）。
     verify_fn:        程序化核查函数，签名 (state) -> (bad: list, ok: list)；不传则默认通过。
     use_planner:      是否包含 planner 节点（无规划需求的任务可关掉，从 specialist 起步）。
-    provider:         "deepseek" | "agnes"，决定 LLM 网关。
+    provider:         "agnes" | "deepseek"，决定 LLM 网关（默认 agnes）。
     retriever:        Specialist 用的 Retriever（简历源数据）。
     planner_retriever: Planner 用的 Retriever（市场/JD 情报）。不传则 fallback 到 retriever。
     rag_top_k:        RAG 检索返回的最大文档数（默认 5）。
