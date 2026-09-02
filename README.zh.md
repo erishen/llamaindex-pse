@@ -57,7 +57,7 @@ llamaindex-pse/
 ├── src/llamaindex_pse/     # 核心框架（任务无关）
 │   ├── __init__.py          # 公开 API: build_workflow(), create_llm()
 │   ├── config.py            # 从环境变量 / .env 读取配置
-│   ├── model.py             # LlamaIndex OpenAI 兼容 LLM（deepseek / agnes）
+│   ├── model.py             # LlamaIndex OpenAI 兼容 LLM（deepseek / 备选网关）
 │   ├── tools.py             # read_file（沙箱）+ run_bash（沙箱）
 │   ├── prompts.py           # 提示词加载（tasks/<task>/prompts/*.md）
 │   └── workflow.py          # Workflow: planner → specialist → evaluator → fix
@@ -88,9 +88,9 @@ cp .env.example .env
 | `OPENAI_API_KEY` | ✅* | LLM API key（OpenAI 兼容，如 DeepSeek） |
 | `OPENAI_BASE_URL` | ✅* | LLM API base URL |
 | `OPENAI_MODEL` | ✅* | 模型名（如 `deepseek-chat`） |
-| `AGNES_KEY` | ✅† | 备选：Agnes API key（免费模型） |
-| `AGNES_BASE_URL` | ✅† | 备选：Agnes base URL |
-| `AGNES_MODEL` | ✅† | 备选：Agnes 模型名（如 `agnes-2.0-flash`） |
+| `AGNES_KEY` | ✅† | 备选：OpenAI 兼容 API key（通过 `AGNES_*` 配置） |
+| `AGNES_BASE_URL` | ✅† | 备选：OpenAI 兼容 base URL |
+| `AGNES_MODEL` | ✅† | 备选：OpenAI 兼容模型名 |
 | `PSE_ROOT` | ✅ | `read_file` / `run_bash` 沙箱根路径 |
 | `PSE_MAX_RETRIES` | | 最大验证/修正轮数（默认 `3`） |
 | `EMBEDDING_PROVIDER` | | `openai`（DeepSeek/阿里 等）或 `ollama`（本地）。默认 `openai` |
@@ -159,7 +159,7 @@ result = asyncio.run(workflow.run(
 
 本项目以**本地 CLI** 运行，但**并非离线隔离**：它会把你的任务数据发往第三方 API。
 
-- **LLM API**（`chat.completions`）— 完整的 `task_input`、`task_data`、检索到的 RAG 文档，以及每轮生成的产物，都会发往所选 provider（默认 DeepSeek，或 Agnes）。provider 按其自身留存策略存储 prompt。
+- **LLM API**（`chat.completions`）— 完整的 `task_input`、`task_data`、检索到的 RAG 文档，以及每轮生成的产物，都会发往所选 provider（默认 DeepSeek，或第三方 OpenAI 兼容网关）。provider 按其自身留存策略存储 prompt。
 - **Embedding API**（`embeddings.create`）— 启用 RAG 时（如 `resume-tailor` 任务）会先把待索引文档切块，再发往 embedding 端点构建向量索引。默认 `EMBEDDING_PROVIDER=openai`（如 DeepSeek embedding）意味着**第二次外部传输**。将 `EMBEDDING_PROVIDER=ollama` 可让索引构建完全在本地完成。
 
 若输入含 PII（例如带真实雇主、日期、联系方式、私人仓库名的简历），这些 PII 会离开本机。要避免第三方传输，唯一途径是**自托管模型**（本地 LLM + 本地 embedding）。

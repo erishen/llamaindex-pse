@@ -8,7 +8,7 @@
     python run.py --jd path/to/jd.md          # JD 定制模式
     python run.py --recommend                  # 自由推荐模式（无需 JD）
     python run.py --docs /path/to/docs         # 指定文档目录（默认 work/docs）
-    python run.py --provider agnes              # 使用 Agnes 网关
+    python run.py --provider agnes              # 使用 OpenAI 兼容备选网关
     python run.py --provider scnet-minimax      # 使用 SCNet MiniMax 网关
     python run.py --provider scnet-kimi         # 使用 SCNet Kimi 网关
 """
@@ -85,11 +85,11 @@ def _apply_target_role(text: str, role: str) -> str:
     """确定性固定目标岗位：大标题与求职意向·期望职位均强制为 role。
 
     仅用于自由推荐模式且设置了 RESUME_TARGET_ROLE 时，保证标题不再随 LLM 采样漂移。
-    兼容 DeepSeek 格式（# 姓名 | 岗位）和 Agnes 格式（# 姓名 - 岗位/岗位）。
+    兼容两种标题格式：竖线分隔（# 姓名 | 岗位）与横线分隔（# 姓名 - 岗位/岗位）。
     """
     # 大标题：匹配 # 姓名 <分隔符> 任意岗位 两种变体
     #   DeepSeek: # ［姓名］ | AI 工程师
-    #   Agnes:    # ［姓名］ - AI 工程化工程师 / LLM 应用工程师
+    #   横线分隔:  # ［姓名］ - AI 工程化工程师 / LLM 应用工程师
     # 用 [^|\n-]+ 吃姓名（不含 | 和 -），再用 [|\-] 匹配分隔符
     text = re.sub(
         r"^(#\s[^|\n-]+)[|\-].*$",

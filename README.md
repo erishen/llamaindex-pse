@@ -57,7 +57,7 @@ llamaindex-pse/
 ├── src/llamaindex_pse/     # Core framework (task-agnostic)
 │   ├── __init__.py          # Public API: build_workflow(), create_llm()
 │   ├── config.py            # Settings from environment / .env
-│   ├── model.py             # LlamaIndex OpenAI-compatible LLM (deepseek / agnes)
+│   ├── model.py             # LlamaIndex OpenAI-compatible LLM (deepseek / alt gateway)
 │   ├── tools.py             # read_file (sandboxed) + run_bash (sandboxed)
 │   ├── prompts.py           # Prompt loader (tasks/<task>/prompts/*.md)
 │   └── workflow.py          # Workflow: planner → specialist → evaluator → fix
@@ -88,9 +88,9 @@ You need **either** the `OPENAI_*` set (DeepSeek is OpenAI-compatible) **or** th
 | `OPENAI_API_KEY` | ✅* | LLM API key (OpenAI-compatible, e.g. DeepSeek) |
 | `OPENAI_BASE_URL` | ✅* | LLM API base URL |
 | `OPENAI_MODEL` | ✅* | Model name (e.g. `deepseek-chat`) |
-| `AGNES_KEY` | ✅† | Alternative: Agnes API key (free model) |
-| `AGNES_BASE_URL` | ✅† | Alternative: Agnes base URL |
-| `AGNES_MODEL` | ✅† | Alternative: Agnes model name (e.g. `agnes-2.0-flash`) |
+| `AGNES_KEY` | ✅† | Alternative OpenAI-compatible API key (set via `AGNES_*`) |
+| `AGNES_BASE_URL` | ✅† | Alternative OpenAI-compatible base URL |
+| `AGNES_MODEL` | ✅† | Alternative model name (your OpenAI-compatible model) |
 | `PSE_ROOT` | ✅ | Sandbox root for `read_file` / `run_bash` |
 | `PSE_MAX_RETRIES` | | Max evaluator/fix rounds (default: `3`) |
 | `EMBEDDING_PROVIDER` | | `openai` (DeepSeek/Ali, etc.) or `ollama` (local). Default `openai` |
@@ -159,7 +159,7 @@ result = asyncio.run(workflow.run(
 
 This project runs as a local CLI, but it is **not** air-gapped: it transmits your task data to third-party APIs.
 
-- **LLM API** (`chat.completions`) — the full `task_input`, `task_data`, retrieved RAG documents, and every generated artifact are sent to the configured provider (DeepSeek by default, or Agnes). The provider stores prompts under its own retention policy.
+- **LLM API** (`chat.completions`) — the full `task_input`, `task_data`, retrieved RAG documents, and every generated artifact are sent to the configured provider (DeepSeek by default, or a third-party OpenAI-compatible gateway). The provider stores prompts under its own retention policy.
 - **Embedding API** (`embeddings.create`) — when RAG is enabled (the `resume-tailor` task uses it), the indexed documents are chunked and sent to the embedding endpoint to build the vector index. With the default `EMBEDDING_PROVIDER=openai` (e.g. DeepSeek embedding) this is a second external transfer. Set `EMBEDDING_PROVIDER=ollama` to keep index building fully local.
 
 If your input contains PII (e.g. a résumé with real employers, dates, contact info, or private repo names), that PII leaves your machine. The only way to avoid third-party transfer is to **self-host the models** (local LLM + local embedding).

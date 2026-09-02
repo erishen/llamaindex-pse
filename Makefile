@@ -31,18 +31,18 @@ clean: ## 清理缓存/构建产物
 # ── JD 定制模式 ──
 # 用法: make resume-tailor JD=path/to/jd.md
 #       make resume-tailor JD=path/to/jd.md DOCS=/path/to/docs
-resume-tailor: ## JD 定制简历 - agnes（默认，需 JD= 参数）
+resume-tailor: ## JD 定制简历 - OpenAI 兼容备选网关（默认，需 JD= 参数）
 	$(PY) tasks/resume-tailor/run.py --jd $(JD) $(if $(DOCS),--docs $(DOCS),)
 
-resume-tailor-deepseek: ## JD 定制简历 - deepseek（需 JD= 参数，覆盖默认 agnes）
+resume-tailor-deepseek: ## JD 定制简历 - deepseek（需 JD= 参数，覆盖默认网关）
 	$(PY) tasks/resume-tailor/run.py --jd $(JD) --provider deepseek $(if $(DOCS),--docs $(DOCS),)
 
 # ── 自由推荐模式（无需 JD）──
 # 根据你的经历 + 国内招聘行情，推荐最适合的岗位并定制简历
-resume-recommend: ## 自由推荐模式 - agnes（默认，无需 JD）
+resume-recommend: ## 自由推荐模式 - OpenAI 兼容备选网关（默认，无需 JD）
 	$(PY) tasks/resume-tailor/run.py --recommend $(if $(DOCS),--docs $(DOCS),)
 
-resume-recommend-deepseek: ## 自由推荐模式 - deepseek（无需 JD，覆盖默认 agnes）
+resume-recommend-deepseek: ## 自由推荐模式 - deepseek（无需 JD，覆盖默认网关）
 	$(PY) tasks/resume-tailor/run.py --recommend --provider deepseek $(if $(DOCS),--docs $(DOCS),)
 
 # ── SCNet 模式（Kimi / MiniMax，需 .env 中 SCNET_* 配置）──
@@ -58,11 +58,11 @@ resume-tailor-scnet-kimi: ## JD 定制模式 - SCNet Kimi（需 JD= 参数）
 resume-tailor-scnet-minimax: ## JD 定制模式 - SCNet MiniMax（需 JD= 参数）
 	$(PY) tasks/resume-tailor/run.py --jd $(JD) --provider scnet-minimax $(if $(DOCS),--docs $(DOCS),)
 
-resume-tailor-rebuild: ## 强制重建分区 embedding 索引 - agnes（默认）
+resume-tailor-rebuild: ## 强制重建分区 embedding 索引 - OpenAI 兼容备选网关（默认）
 	rm -rf tasks/resume-tailor/.index_cache/
 	$(PY) tasks/resume-tailor/run.py --recommend --rebuild
 
-resume-tailor-rebuild-deepseek: ## 强制重建分区 embedding 索引 - deepseek（覆盖默认 agnes）
+resume-tailor-rebuild-deepseek: ## 强制重建分区 embedding 索引 - deepseek（覆盖默认网关）
 	rm -rf tasks/resume-tailor/.index_cache/
 	$(PY) tasks/resume-tailor/run.py --recommend --rebuild --provider deepseek
 
@@ -76,7 +76,7 @@ resume-tailor-rebuild-scnet-minimax: ## 强制重建分区 embedding 索引 - SC
 
 # ── 热点营销内容（RAG + 合规）──
 # 用法: make hot-news TOPIC="AI 新规落地" NEWS_DIR=/path/to/news PLATFORM=xiaohongshu CATEGORY=tech_ai
-#       默认 provider=agnes（对齐用户全局默认）；PROVIDER=deepseek 可覆盖
+#       默认 provider=agnes（框架内置备选网关）；PROVIDER=deepseek 可覆盖
 #       NEWS_DIR 留空则纯 topic 降级生成（事实对照缺失，合规风险高，不推荐）
 PLATFORM ?= xiaohongshu
 CATEGORY ?= tech_ai
@@ -85,7 +85,7 @@ OUT_DIR ?= tasks/hot-news/articles
 MAX_AGE_DAYS ?= 2
 SELECTION ?= random
 
-hot-news: ## 热点新闻→RAG 生成→合规校对的营销内容（TOPIC= 留空则自动选题，默认 agnes）
+hot-news: ## 热点新闻→RAG 生成→合规校对的营销内容（TOPIC= 留空则自动选题，默认 OpenAI 兼容备选网关）
 	$(PY) tasks/hot-news/run.py $(if $(TOPIC),--topic "$(TOPIC)",) \
 		$(if $(NEWS_DIR),--news-dir $(NEWS_DIR),) \
 		$(if $(PROVIDER),--provider $(PROVIDER),) \
@@ -100,7 +100,7 @@ hot-news-topics: ## 列出微博热搜候选（标题+热度），供人工挑�
 hot-news-test: ## 运行 hot-news 单元测试（引流/人设/指纹纯逻辑，不触发 LLM/embedding）
 	uv run pytest tasks/hot-news/tests/ -v
 
-hot-news-deepseek: ## 同上 - 显式 deepseek provider（覆盖默认 agnes）
+hot-news-deepseek: ## 同上 - 显式 deepseek provider（覆盖默认网关）
 	$(MAKE) hot-news PROVIDER=deepseek $(if $(TOPIC),TOPIC="$(TOPIC)",) PLATFORM=$(PLATFORM) CATEGORY=$(CATEGORY) $(if $(NEWS_DIR),NEWS_DIR=$(NEWS_DIR),) $(if $(REBUILD),REBUILD=1,)
 
 # ── 热点新闻抓取（落盘 tasks/hot-news/news，供 hot-news 的 --news-dir 消费）──
