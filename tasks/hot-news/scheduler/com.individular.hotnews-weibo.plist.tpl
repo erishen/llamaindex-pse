@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.individular.hotnews-weibo</string>
+    <string>com.erishen.hotnews-weibo</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>

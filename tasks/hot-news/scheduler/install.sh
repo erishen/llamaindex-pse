@@ -37,22 +37,22 @@ install)
     : > "$LOGS_DIR/launchd-weibo.out.log"; : > "$LOGS_DIR/launchd-weibo.err.log"
     : > "$LOGS_DIR/launchd-full.out.log";  : > "$LOGS_DIR/launchd-full.err.log"
     for j in "${JOBS[@]}"; do
-      sed_plist "$SCRIPT_DIR/com.individular.hotnews-$j.plist.tpl" "$LAUNCH_AGENTS/com.individular.hotnews-$j.plist"
-      launchctl bootout "gui/$UID_NUM" "$LAUNCH_AGENTS/com.individular.hotnews-$j.plist" 2>/dev/null || true
-      launchctl bootstrap "gui/$UID_NUM" "$LAUNCH_AGENTS/com.individular.hotnews-$j.plist"
-      echo "✅ 已加载 com.individular.hotnews-$j"
+      sed_plist "$SCRIPT_DIR/com.erishen.hotnews-$j.plist.tpl" "$LAUNCH_AGENTS/com.erishen.hotnews-$j.plist"
+      launchctl bootout "gui/$UID_NUM" "$LAUNCH_AGENTS/com.erishen.hotnews-$j.plist" 2>/dev/null || true
+      launchctl bootstrap "gui/$UID_NUM" "$LAUNCH_AGENTS/com.erishen.hotnews-$j.plist"
+      echo "✅ 已加载 com.erishen.hotnews-$j"
     done
     ;;
   uninstall)
     for j in "${JOBS[@]}"; do
-      launchctl bootout "gui/$UID_NUM" "$LAUNCH_AGENTS/com.individular.hotnews-$j.plist" 2>/dev/null || true
-      echo "✅ 已卸载 com.individular.hotnews-$j"
+      launchctl bootout "gui/$UID_NUM" "$LAUNCH_AGENTS/com.erishen.hotnews-$j.plist" 2>/dev/null || true
+      echo "✅ 已卸载 com.erishen.hotnews-$j"
     done
     ;;
   status)
     for j in "${JOBS[@]}"; do
       echo "── $j ──"
-      launchctl print "gui/$UID_NUM/com.individular.hotnews-$j" || echo "  (未加载)"
+      launchctl print "gui/$UID_NUM/com.erishen.hotnews-$j" || echo "  (未加载)"
     done
     ;;
   *)

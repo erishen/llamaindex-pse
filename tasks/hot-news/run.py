@@ -109,7 +109,7 @@ PERSONA_SUBDIRS = (
     "resume-story",
 )
 
-# 非文章的静态/工具页 slug（与 wordpress-tools/gen_keywords_index.py 的 SKIP_SLUGS 对齐）：
+# 非文章的静态/工具页 slug（与文章库索引脚本的 SKIP_SLUGS 对齐）：
 # 首页/关于/简历/隐私等页面不是可引流的原创文章，索引时跳过。
 SKIP_ARTICLE_SLUGS = {
     "home", "about", "resume", "resume-pe",
@@ -749,7 +749,7 @@ async def main():
         type=str,
         default="",
         help="个人原创文章目录（zh/en 双语，RAG 引流素材源）。"
-        "缺省自动用 personal/personal-site/wordpress-tools/articles",
+        "需显式指定；缺省不注入引流素材。",
     )
     ap.add_argument(
         "--articles-top-k",
@@ -806,15 +806,14 @@ async def main():
         if args.persona_dir:
             print(f"⚠️ 人设目录不存在: {args.persona_dir}，跳过人设注入")
 
-    # 原创文章引流源：缺省用 workspace 下 personal-site 的 zh/en 双语文章库
-    articles_dir = Path(args.articles_dir) if args.articles_dir else (
-        PROJECT_ROOT.parent.parent / "personal" / "personal-site" / "wordpress-tools" / "articles"
-    )
+    # 原创文章引流源：需通过 --articles-dir 显式指定。
+    # 仓库不内置私有文章库的硬编码路径（避免泄露工作区结构）；缺省不注入引流素材。
+    articles_dir = Path(args.articles_dir) if args.articles_dir else None
     # 索引语言子目录（默认仅 zh，中文稿件不混英文旧文）
     articles_langs = tuple(
         s.strip() for s in args.articles_langs.split(",") if s.strip()
     )
-    if not articles_dir.exists():
+    if not articles_dir or not articles_dir.exists():
         articles_dir = None
         if args.articles_dir:
             print(f"⚠️ 原创文章目录不存在: {args.articles_dir}，跳过引流素材注入")

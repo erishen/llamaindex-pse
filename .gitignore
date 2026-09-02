@@ -25,3 +25,5 @@ tasks/hot-news/news/
 tasks/hot-news/articles/
 # 发布器（Playwright 平台自动化/风控绕过脚本）+ 登录态 + 品牌图：整体不入库
 tasks/hot-news/publish/
+# 抓取/刷新运行日志（含本机绝对路径，禁止入库）
+tasks/hot-news/logs/

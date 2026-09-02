@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.individular.hotnews-full</string>
+    <string>com.erishen.hotnews-full</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>

@@ -7,13 +7,18 @@ import os
 import re
 from pathlib import Path
 
+import pytest
+
 import run as hn  # noqa: I001 - 本地模块由 conftest 注入 path，放第三方后
 from compliance import verify_compliance
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent.parent
+# 本地引流索引校验用的文章库目录：通过环境变量显式指定，避免硬编码私有工作区路径。
+# 未配置时指向仓库内 fixtures 占位目录（不存在则对应测试 skip）。
+_ARTICLES_DIR_ENV = os.getenv("HOTNEWS_ARTICLES_DIR", "")
 ZH_ARTICLES = (
-    PROJECT_ROOT
-    / "personal" / "personal-site" / "wordpress-tools" / "articles" / "zh"
+    Path(_ARTICLES_DIR_ENV) / "zh"
+    if _ARTICLES_DIR_ENV
+    else Path(__file__).resolve().parent / "fixtures" / "articles" / "zh"
 )
 
 
@@ -67,6 +72,8 @@ class TestLoadPublishedArticleUrls:
 
     def test_all_published_zh_have_indexable_file(self):
         """发布登记表中每个 zh URL 至少对应一个 zh 文章文件（无遗漏）。"""
+        if not ZH_ARTICLES.exists():
+            pytest.skip("未配置 HOTNEWS_ARTICLES_DIR，跳过本地引流索引校验")
         urls = hn._load_published_article_urls()
         # interview 与 fastapi-web 共享同一 URL，去重后即文件总数上限
         unique_zh = set(urls.values())
@@ -117,7 +124,7 @@ class TestArticleIsIndexable:
         assert hn._article_is_indexable("electron-react-desktop-app", urls) is False
 
     def test_unpublished_not_indexable(self):
-        assert hn._article_is_indexable("wordpress-tools", {}) is False
+        assert hn._article_is_indexable("privacy-policy", {}) is False
 
     def test_override_article_indexable(self):
         urls = {}
