@@ -11,7 +11,7 @@
     ["DeepSeek", "［模型:DS］"],
     ["ChatGPT", "［模型:GPT］"],
     ["OpenAI", "［模型:OA］"],
-    ["\\bagnes\\b", "［模型:AG］"]
+    ["free-2\\.0-flash", "［模型:FR］"]
   ],
   "restore": {
     "［姓名］": "张三",
@@ -23,7 +23,7 @@
     "［模型:DS］": "DeepSeek",
     "［模型:GPT］": "ChatGPT",
     "［模型:OA］": "OpenAI",
-    "［模型:AG］": "agnes"
+    "［模型:FR］": "free-2.0-flash"
   },
   "opensource": [
     {"name": "autogen-pse", "desc": "示例项目 A（PSE 三角色 Agent 框架）", "stack": "示例技术栈"},

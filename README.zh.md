@@ -81,16 +81,16 @@ make install        # 或: uv sync
 cp .env.example .env
 ```
 
-需要 **`OPENAI_*` 组（DeepSeek，OpenAI 兼容）** 或 **`AGNES_*` 组** 二者之一；通过 `provider` 参数切换。
+需要 **`OPENAI_*` 组（DeepSeek，OpenAI 兼容）** 或 **`FREE_*` 组** 二者之一；通过 `provider` 参数切换。
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
 | `OPENAI_API_KEY` | ✅* | LLM API key（OpenAI 兼容，如 DeepSeek） |
 | `OPENAI_BASE_URL` | ✅* | LLM API base URL |
 | `OPENAI_MODEL` | ✅* | 模型名（如 `deepseek-chat`） |
-| `AGNES_KEY` | ✅† | 备选：OpenAI 兼容 API key（通过 `AGNES_*` 配置） |
-| `AGNES_BASE_URL` | ✅† | 备选：OpenAI 兼容 base URL |
-| `AGNES_MODEL` | ✅† | 备选：OpenAI 兼容模型名 |
+| `FREE_KEY` | ✅† | 备选：OpenAI 兼容 API key（通过 `FREE_*` 配置） |
+| `FREE_BASE_URL` | ✅† | 备选：OpenAI 兼容 base URL |
+| `FREE_MODEL` | ✅† | 备选：OpenAI 兼容模型名 |
 | `PSE_ROOT` | ✅ | `read_file` / `run_bash` 沙箱根路径 |
 | `PSE_MAX_RETRIES` | | 最大验证/修正轮数（默认 `3`） |
 | `EMBEDDING_PROVIDER` | | `openai`（DeepSeek/阿里 等）或 `ollama`（本地）。默认 `openai` |
@@ -99,7 +99,7 @@ cp .env.example .env
 | `EMBEDDING_BASE_URL` | | 默认复用 `OPENAI_BASE_URL` |
 | `OLLAMA_BASE_URL` | | Ollama 端点（默认 `http://localhost:11434`） |
 
-\* 使用 `provider="deepseek"`（默认）时必填。 &nbsp; † 使用 `provider="agnes"` 时必填。 &nbsp; ‡ `EMBEDDING_PROVIDER=openai` 时必填。
+\* 使用 `provider="deepseek"`（默认）时必填。 &nbsp; † 使用 `provider="free"` 时必填。 &nbsp; ‡ `EMBEDDING_PROVIDER=openai` 时必填。
 
 > `resume-tailor` 任务还会从 `.env` 读取个人配置（`RESUME_*` 系列，见 `.env.example`）。这些配置含 PII（任职期间、源文件名、禁用语等），必须留在已 gitignore 的 `.env` 中。
 

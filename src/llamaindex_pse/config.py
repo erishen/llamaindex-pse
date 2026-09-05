@@ -15,10 +15,10 @@ class Settings:
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "")
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "")
     PSE_MAX_RETRIES: int = int(os.getenv("PSE_MAX_RETRIES", "3"))
-    # Agnes 网关（与 DeepSeek 同 OpenAI 兼容协议，独立 key / base_url / 模型）
-    AGNES_KEY: str = os.getenv("AGNES_KEY", "")
-    AGNES_BASE_URL: str = os.getenv("AGNES_BASE_URL", "")
-    AGNES_MODEL: str = os.getenv("AGNES_MODEL", "")
+    # 免费网关（与 DeepSeek 同 OpenAI 兼容协议，独立 key / base_url / 模型）
+    FREE_KEY: str = os.getenv("FREE_KEY", "")
+    FREE_BASE_URL: str = os.getenv("FREE_BASE_URL", "")
+    FREE_MODEL: str = os.getenv("FREE_MODEL", "")
     # SCNet 网关（Kimi / MiniMax，OpenAI 兼容协议，独立 key / base_url / 模型）
     SCNET_KEY: str = os.getenv("SCNET_KEY", "")
     SCNET_BASE_URL: str = os.getenv("SCNET_BASE_URL", "")

@@ -141,7 +141,7 @@ class PSEWorkflow(Workflow):
         verify_fn: Optional[Callable] = None,
         max_retries: int = 3,
         use_planner: bool = True,
-        provider: str = "agnes",
+        provider: str = "free",
         retriever=None,
         planner_retriever=None,
         rag_top_k: int = 5,
@@ -402,7 +402,7 @@ def build_workflow(
     tools:            注入 agent 的工具列表（默认 read_file + run_bash）。
     verify_fn:        程序化核查函数，签名 (state) -> (bad: list, ok: list)；不传则默认通过。
     use_planner:      是否包含 planner 节点（无规划需求的任务可关掉，从 specialist 起步）。
-    provider:         "agnes" | "deepseek"，决定 LLM 网关（默认 agnes）。
+    provider:         "free" | "deepseek"，决定 LLM 网关（默认 free）。
     retriever:        Specialist 用的 Retriever（简历源数据）。
     planner_retriever: Planner 用的 Retriever（市场/JD 情报）。不传则 fallback 到 retriever。
     rag_top_k:        RAG 检索返回的最大文档数（默认 5）。

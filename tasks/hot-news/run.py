@@ -12,7 +12,7 @@
                   --platform xiaohongshu --category tech_ai
 
     # 降级：仅给主题，无新闻源（verify 会警告，无事实对照）
-    python run.py --topic "AI 新规落地" --platform douyin --provider agnes
+    python run.py --topic "AI 新规落地" --platform douyin --provider free
 
 合规：确定性核查见 compliance.py（按品类+平台配置）。
 """
@@ -770,9 +770,9 @@ async def main():
     )
     ap.add_argument(
         "--provider",
-        choices=["deepseek", "agnes", "scnet-kimi", "scnet-minimax"],
-        default="agnes",
-        help="LLM 网关（默认 agnes）",
+        choices=["deepseek", "free", "scnet-kimi", "scnet-minimax"],
+        default="free",
+        help="LLM 网关（默认 free）",
     )
     ap.add_argument("--platform", choices=PLATFORMS, default="xiaohongshu", help="目标发布平台")
     ap.add_argument("--category", choices=CATEGORIES, default="tech_ai", help="内容品类（决定违禁词表）")

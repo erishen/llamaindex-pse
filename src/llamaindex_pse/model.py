@@ -2,13 +2,13 @@
 
 LLM 支持多种 provider（均 OpenAI 兼容协议）：
   - "deepseek"（默认）：用 OPENAI_* 变量
-  - "agnes"：用 AGNES_* 变量
+  - "free"：用 FREE_* 变量
   - "scnet-kimi"：用 SCNET_* 变量 + SCNET_KIMI_MODEL（Kimi-K2.6）
   - "scnet-minimax"：用 SCNET_* 变量 + SCNET_MINIMAX_MODEL（MiniMax-M2.5）
 
 LlamaIndex 的 OpenAI LLM 封装在 metadata 属性中调用
 openai_modelname_to_contextsize()，对非 OpenAI 官方模型（deepseek-chat、
-agnes-2.0-flash）会报 ValueError。因此直接用 openai SDK 实现 chat/complete，
+free-2.0-flash）会报 ValueError。因此直接用 openai SDK 实现 chat/complete，
 完全绕开 LlamaIndex 的 OpenAI 封装。
 
 Embedding 同理：CustomOpenAIEmbedding 基于 openai SDK 实现。
@@ -28,7 +28,7 @@ class TokenStats:
     PRICING = {
         "deepseek-chat": {"input": 1.0, "output": 2.0},       # DeepSeek V3 官方价
         "deepseek-reasoner": {"input": 4.0, "output": 16.0},  # DeepSeek R1
-        "agnes-2.0-flash": {"input": 0.5, "output": 1.5},     # Agnes 网关（估算）
+        "free-2.0-flash": {"input": 0.5, "output": 1.5},     # 免费网关（估算）
     }
 
     def __init__(self):
@@ -161,13 +161,13 @@ class SimpleLLM:
 def create_llm(provider: str = "deepseek") -> SimpleLLM:
     """创建 OpenAI 兼容 LLM。
 
-    provider: "deepseek" | "agnes" | "scnet-kimi" | "scnet-minimax"
+    provider: "deepseek" | "free" | "scnet-kimi" | "scnet-minimax"
     """
-    if provider == "agnes":
-        api_key = settings.AGNES_KEY
-        base_url = settings.AGNES_BASE_URL
-        model = settings.AGNES_MODEL
-        label = "AGNES"
+    if provider == "free":
+        api_key = settings.FREE_KEY
+        base_url = settings.FREE_BASE_URL
+        model = settings.FREE_MODEL
+        label = "FREE"
     elif provider == "scnet-kimi":
         api_key = settings.SCNET_KEY
         base_url = settings.SCNET_BASE_URL
@@ -190,7 +190,7 @@ def create_llm(provider: str = "deepseek") -> SimpleLLM:
         )
     if not model:
         raise RuntimeError(
-            f"未设置 {label}_MODEL。请在 .env 中补充模型名（例如 AGNES_MODEL）。"
+            f"未设置 {label}_MODEL。请在 .env 中补充模型名（例如 FREE_MODEL）。"
         )
     return SimpleLLM(
         model=model,

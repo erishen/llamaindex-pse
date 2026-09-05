@@ -76,7 +76,7 @@ resume-tailor-rebuild-scnet-minimax: ## 强制重建分区 embedding 索引 - SC
 
 # ── 热点营销内容（RAG + 合规）──
 # 用法: make hot-news TOPIC="AI 新规落地" NEWS_DIR=/path/to/news PLATFORM=xiaohongshu CATEGORY=tech_ai
-#       默认 provider=agnes（框架内置备选网关）；PROVIDER=deepseek 可覆盖
+#       默认 provider=free（框架内置免费网关）；PROVIDER=deepseek 可覆盖
 #       NEWS_DIR 留空则纯 topic 降级生成（事实对照缺失，合规风险高，不推荐）
 PLATFORM ?= xiaohongshu
 CATEGORY ?= tech_ai

@@ -38,7 +38,7 @@ uv run python run.py --topic "AI 新规落地" \
     --news-dir /path/to/news --platform xiaohongshu --category tech_ai
 
 # 降级：仅给主题，无新闻源（verify 会警告，无事实对照）
-uv run python run.py --topic "AI 新规落地" --platform douyin --provider agnes
+uv run python run.py --topic "AI 新规落地" --platform douyin --provider free
 ```
 
 ### 参数
@@ -49,7 +49,7 @@ uv run python run.py --topic "AI 新规落地" --platform douyin --provider agne
 | `--selection` | 自动选题策略：`random`(默认, 有据热搜中随机，同快照产出不同选题) / `top`(有据热搜中最高热度) | `random` |
 | 拉黑词 | 自动选题/兜底/抓取三层统一过滤：标题命中「鸿蒙/HarmonyOS/Harmony」即跳过（改 `run.py` 的 `EXCLUDED_TOPICS` 与 `fetch_news.py --exclude`） | 鸿蒙系列 |
 | `--news-dir` | 已抓取新闻目录，RAG grounding 源 | 空（降级） |
-| `--provider` | `deepseek` / `agnes` / `scnet-kimi` / `scnet-minimax` | `agnes` |
+| `--provider` | `deepseek` / `free` / `scnet-kimi` / `scnet-minimax` | `free` |
 | `--platform` | `xiaohongshu` / `douyin` / `zhihu` / `toutiao` | `xiaohongshu` |
 | `--category` | `tech_ai`(默认最宽松) / `beauty` / `food` / `education` / `finance` / `medical` / `ecommerce` | `tech_ai` |
 | `--top-k` | RAG 检索 top-k | `8` |
@@ -70,7 +70,7 @@ uv run python run.py --topic "AI 新规落地" --platform douyin --provider agne
   topic: "交给AI主编20分钟，多份成果齐全"
   platform: xiaohongshu
   category: tech_ai
-  provider: agnes
+  provider: free
   generated_at: "2026-08-30 21:25:02"
   source_url: "https://www.qbitai.com/2026/08/481372.html"
   heat_topic: "华为新三折叠"

@@ -81,16 +81,16 @@ Copy `.env.example` to `.env` and fill in your values:
 cp .env.example .env
 ```
 
-You need **either** the `OPENAI_*` set (DeepSeek is OpenAI-compatible) **or** the `AGNES_*` set. Both are supported via `provider` parameter.
+You need **either** the `OPENAI_*` set (DeepSeek is OpenAI-compatible) **or** the `FREE_*` set. Both are supported via `provider` parameter.
 
 | Variable | Required | Description |
 |---|---|---|
 | `OPENAI_API_KEY` | ✅* | LLM API key (OpenAI-compatible, e.g. DeepSeek) |
 | `OPENAI_BASE_URL` | ✅* | LLM API base URL |
 | `OPENAI_MODEL` | ✅* | Model name (e.g. `deepseek-chat`) |
-| `AGNES_KEY` | ✅† | Alternative OpenAI-compatible API key (set via `AGNES_*`) |
-| `AGNES_BASE_URL` | ✅† | Alternative OpenAI-compatible base URL |
-| `AGNES_MODEL` | ✅† | Alternative model name (your OpenAI-compatible model) |
+| `FREE_KEY` | ✅† | Alternative OpenAI-compatible API key (set via `FREE_*`) |
+| `FREE_BASE_URL` | ✅† | Alternative OpenAI-compatible base URL |
+| `FREE_MODEL` | ✅† | Alternative model name (your OpenAI-compatible model) |
 | `PSE_ROOT` | ✅ | Sandbox root for `read_file` / `run_bash` |
 | `PSE_MAX_RETRIES` | | Max evaluator/fix rounds (default: `3`) |
 | `EMBEDDING_PROVIDER` | | `openai` (DeepSeek/Ali, etc.) or `ollama` (local). Default `openai` |
@@ -99,7 +99,7 @@ You need **either** the `OPENAI_*` set (DeepSeek is OpenAI-compatible) **or** th
 | `EMBEDDING_BASE_URL` | | Defaults to `OPENAI_BASE_URL` |
 | `OLLAMA_BASE_URL` | | Ollama endpoint (default `http://localhost:11434`) |
 
-\* required when `provider="deepseek"` (the default).  &nbsp; † required when `provider="agnes"`.  &nbsp; ‡ required when `EMBEDDING_PROVIDER=openai`.
+\* required when `provider="deepseek"` (the default).  &nbsp; † required when `provider="free"`.  &nbsp; ‡ required when `EMBEDDING_PROVIDER=openai`.
 
 > The `resume-tailor` task also reads personal config from `.env` (`RESUME_*`, see `.env.example`). These contain PII (company periods, source file, banned year phrases) and must stay in the gitignored `.env`.
 

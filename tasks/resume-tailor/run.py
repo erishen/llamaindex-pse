@@ -8,7 +8,7 @@
     python run.py --jd path/to/jd.md          # JD 定制模式
     python run.py --recommend                  # 自由推荐模式（无需 JD）
     python run.py --docs /path/to/docs         # 指定文档目录（默认 work/docs）
-    python run.py --provider agnes              # 使用 OpenAI 兼容备选网关
+    python run.py --provider free                  # 使用 OpenAI 兼容免费网关
     python run.py --provider scnet-minimax      # 使用 SCNet MiniMax 网关
     python run.py --provider scnet-kimi         # 使用 SCNet Kimi 网关
 """
@@ -224,7 +224,7 @@ def _ensure_tagline(resume: str) -> str:
 
 
 # 代表项目在基准简历中的「项目名关键词 → 确认起止区间」映射。
-# 关键词用于匹配生成的 ### 标题（agnes 用「项目名 (公司 | 区间)」、deepseek 用「公司 - 项目名」+ 粗体行两种写法）。
+# 关键词用于匹配生成的 ### 标题（免费网关用「项目名 (公司 | 区间)」、deepseek 用「公司 - 项目名」+ 粗体行两种写法）。
 _PROJECT_KEYWORDS = ["迁移验证", "身份验证", "迪士尼", "营销落地页", "国际站内容平台"]
 
 # 兜底：基准简历未按纪律列出 CIP（避免稀释 AI 品牌），但 LLM 偶发把 CIP 结束日
@@ -254,7 +254,7 @@ def _normalize_project_dates(resume: str, base_text: str) -> str:
     """以基准简历确认的起止区间为准，强制归一生成简历中的项目日期。
 
     根因：LLM 偶发不照抄基准区间，而是从任职 tenure 推断（如把 CIP 写成 2025.01-2026.07
-    而非基准确认的 2025.01-2025.12），且 agnes/deepseek 两种标题写法并存。
+    而非基准确认的 2025.01-2025.12），且免费网关/deepseek 两种标题写法并存。
     此处确定性地把每个项目的日期替换为基准确认值，保证多 provider 产物日期一致且准确。
     """
     date_map = _build_project_date_map(base_text)
@@ -268,7 +268,7 @@ def _normalize_project_dates(resume: str, base_text: str) -> str:
         if not matched:
             continue
         canonical = date_map[matched]
-        # case A: 标题内嵌 (公司 | RANGE) —— agnes 写法
+        # case A: 标题内嵌 (公司 | RANGE) —— 免费网关写法
         new_line, n = re.subn(
             r"(\|\s*)[\d]{4}(?:\.\d\d)?\s*-\s*[\d]{4}(?:\.\d\d)?(?=\s*\))",
             lambda mm: mm.group(1) + canonical,
@@ -295,7 +295,7 @@ def _normalize_project_dates(resume: str, base_text: str) -> str:
 def _normalize_opensource_section(resume: str, base_text: str) -> str:
     """开源章节永远以基准简历为准，杜绝 LLM 把 prompt 内部指令或越界仓库抄进产物。
 
-    根因：agnes 曾把 recommend_specialist.md 的开源"硬性限制"规则 + 6 仓库候选列表原样复制到
+    根因：免费网关曾把 recommend_specialist.md 的开源"硬性限制"规则 + 6 仓库候选列表原样复制到
     简历末段，标题还带"（⚠️ 违反以下规则即不合格）"。此处确定性地删除任何 LLM 生成的开源章节
     （不论标题写法多脏，含括号后缀），再从基准简历"## 个人开源与 AI 实验"块原样重插，
     保证与基准精简口径（当前 3 个仓库）一致。
@@ -364,7 +364,7 @@ def _reorder_projects_by_date(resume: str, latest_end: str = "", latest_company:
         """从项目块提取 (结束年月, 起始年月)；非项目块返回 None。
 
         判定为项目的依据（可靠，不会误伤工作经历块）：
-        - 标题含 ``(公司 | YYYY.MM - YYYY.MM)``（agnes 写法）；或
+        - 标题含 ``(公司 | YYYY.MM - YYYY.MM)``（免费网关写法）；或
         - 标题之后首个非空行是 ``**YYYY.MM - YYYY.MM | 技术栈**``（deepseek 写法，
           标题与日期间允许有空行）。
         工作经历块（``### 公司 | 职位``）标题无日期、首行也非 ``**日期**``，必返回 None。
@@ -393,7 +393,7 @@ def _reorder_projects_by_date(resume: str, latest_end: str = "", latest_company:
 
     # 用户确认的「代表项目」canonical 顺序：覆盖纯日期排序，避免同年结束的项目
     # （如 CIP 与营销落地页均结束 2025.12）在重排时抖动。关键字按出现优先级
-    # 匹配标题，agnes / deepseek 两种标题写法都能命中。
+    # 匹配标题，免费网关 / deepseek 两种标题写法都能命中。
     canonical_order = [
         "迁移验证",     # AI 支付迁移验证与自动化工程化（已含方法论预研）
         "客户身份验证", # 客户身份验证平台 (CIP)
@@ -973,8 +973,8 @@ async def main():
     ap.add_argument("--docs", type=str,
                     default=os.getenv("RESUME_DOCS_PATH", ""),
                     help="文档目录路径（默认从 PSE_ROOT/work/docs 加载）")
-    ap.add_argument("--provider", choices=["deepseek", "agnes", "scnet-kimi", "scnet-minimax"], default="agnes",
-                    help="LLM 网关（agnes 默认 / deepseek / scnet-kimi / scnet-minimax）")
+    ap.add_argument("--provider", choices=["deepseek", "free", "scnet-kimi", "scnet-minimax"], default="free",
+                    help="LLM 网关（free 默认 / deepseek / scnet-kimi / scnet-minimax）")
     ap.add_argument("--top-k", type=int, default=8,
                     help="RAG 检索 top-k 文档数（默认 8）")
     ap.add_argument("--rebuild", action="store_true",
