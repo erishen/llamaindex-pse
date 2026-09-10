@@ -39,6 +39,9 @@ from pathlib import Path
 # 拉黑词单一数据源：默认值取 compliance.EXCLUDED_TOPICS（与 run.py 自动选题同源）
 from compliance import EXCLUDED_TOPICS
 
+# 抓取后生成自包含 HTML 总览（落在 news/ 父目录，不污染 run.py 的 rglob 语料）
+from news_digest import write_digest
+
 BASE = Path(__file__).resolve().parent
 
 # 默认输出目录：与 hot-news 任务的 news-dir 消费约定对齐
@@ -499,6 +502,14 @@ def main() -> int:
 
     removed = _clean_old(out_root, args.keep_days)
     print(f"✅ 完成：新增/更新 {total} 条，清理旧文件 {removed} 个 → {out_root}")
+
+    # 生成聚合总览（HTML，落在 news/ 父目录，不污染 RAG 语料）
+    try:
+        digest = write_digest(out_root)
+        print(f"📊 总览已生成: {digest}")
+    except Exception as exc:  # 总览失败不应阻断抓取主流程
+        print(f"  ⚠️ 总览生成失败（不影响已落盘数据）: {exc}", file=sys.stderr)
+
     if total == 0:
         print(
             "  ⚠️ 未抓到任何热点：直连不通可试 --use-proxy；仍失败请检查网络或 SOURCES 端点。",
