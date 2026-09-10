@@ -456,7 +456,16 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    out_root = Path(args.out)
+    # Make --out absolute before anything else. Every summary line below
+    # ("▶ 抓取热点新闻 → …" / "✅ 完成：… → …" / "📊 总览已生成: …") echoes this
+    # path, and the harness answer-prettifier can only turn *absolute* .html
+    # paths into clickable /api/raw links — a relative --out showed up in the
+    # chat bubble as dead text. It also keeps os.getcwd()-relative surprises
+    # out of _write/_clean_old/_clean_all, which all walk out_root.
+    out_root = Path(args.out).expanduser()
+    if not out_root.is_absolute():
+        out_root = Path.cwd() / out_root
+    out_root = out_root.resolve()
     out_root.mkdir(parents=True, exist_ok=True)
 
     args.exclude = [k.strip().lower() for k in (args.exclude or "").split(",") if k.strip()]

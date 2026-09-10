@@ -350,7 +350,11 @@ def _title_html(it: dict) -> str:
 
 
 def write_digest(news_dir: Path) -> Path:
-    news_dir = Path(news_dir)
+    # resolve() makes the dir absolute (cwd-relative input included). The path
+    # returned here is printed verbatim into the chat bubble ("📊 总览已生成:
+    # …"), and only absolute .html paths get linkified into a clickable
+    # preview, so never hand back a relative one.
+    news_dir = Path(news_dir).resolve()
     out = news_dir.parent / "hot-news-overview.html"
     out.write_text(build_digest(news_dir), encoding="utf-8")
     return out
