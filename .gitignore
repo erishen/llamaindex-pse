@@ -28,3 +28,5 @@ tasks/hot-news/articles/
 tasks/hot-news/publish/
 # 抓取/刷新运行日志（含本机绝对路径，禁止入库）
 tasks/hot-news/logs/
+# 总览 HTML（约每 20 分钟由任务重生成，纯制品、会周期性变脏，不入库）
+tasks/hot-news/hot-news-overview.html
