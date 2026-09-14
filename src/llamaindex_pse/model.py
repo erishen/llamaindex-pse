@@ -95,6 +95,10 @@ class TokenStats:
 token_stats = TokenStats()
 
 
+class _EmptyCompletionError(Exception):
+    """LLM 返回 200 但无 content（reasoning 模型 max_tokens 耗尽/上游空响应）。"""
+
+
 class SimpleLLM:
     """基于 openai SDK 的轻量 LLM（绕开 LlamaIndex OpenAI 校验）。
 
@@ -105,16 +109,36 @@ class SimpleLLM:
 
     def __init__(self, model: str, api_key: str, base_url: str):
         self._model = model
-        self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        # X-Llm-Router-Agent: off —— 纯 chat 请求绕开网关 agent 模式（不注入工具池），
+        # 避免 sensenova 等不支持 tools 的上游被 429/502 拒（hot-news 只是普通 LLM 调用）。
+        self._client = openai.OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            default_headers={"X-Llm-Router-Agent": "off"},
+        )
 
     def _call_with_retry(self, fn, max_retries=3, delay=5):
-        """带重试的 API 调用，应对网关偶发断连。"""
+        """带重试的 API 调用，应对网关偶发断连与瞬时 5xx。
+
+        - APIConnectionError：网络抖动
+        - InternalServerError（5xx，含网关 502 upstream_unavailable）：
+          多 provider 路由中某上游偶发返回空 body / 超时
+        - 空内容：reasoning 模型把 max_tokens 全耗在思考上，choices[0] 无 content
+        """
         for attempt in range(max_retries):
             try:
-                return fn()
-            except openai.APIConnectionError as e:
+                resp = fn()
+                # 空内容检测：message 无 content 视为失败（reasoning 模型只输出思考）
+                try:
+                    msg = resp.choices[0].message
+                    if msg and not (msg.content or "").strip():
+                        raise _EmptyCompletionError()
+                except (AttributeError, IndexError):
+                    raise _EmptyCompletionError()
+                return resp
+            except (openai.APIConnectionError, openai.InternalServerError, _EmptyCompletionError) as e:
                 if attempt < max_retries - 1:
-                    print(f"  ⚠️ 连接失败 ({attempt+1}/{max_retries})，{delay}s 后重试...")
+                    print(f"  ⚠️ LLM 调用异常 ({attempt+1}/{max_retries})：{type(e).__name__}，{delay}s 后重试...")
                     time.sleep(delay)
                 else:
                     raise
