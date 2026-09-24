@@ -24,7 +24,7 @@ hot-news/
 │   └── fix.md         # 修正（Fix 循环规则；无此文件时 workflow 回退 legacy 简历规则）
 ├── news/            # fetch_news.py 抓取落盘（weibo/qbitai/infoq/kr36/sspai 子目录，RAG grounding 源；其中 qbitai+infoq 为 AI 专属源，RSS 摘要过短时自动抓取文章正文）
 ├── articles/        # 成稿输出目录（文件名带生成时间戳，见下）
-├── scheduler/       # launchd 定时刷新（refresh.sh + install.sh + plist 模板，见「定时刷新」）
+├── scheduler/       # 手动刷新（refresh.sh + install.sh + plist 模板，见「手动刷新」）
 ├── publish/         # 三个平台的发布器（Playwright）+ 共享 common.py + 品牌多图 cover_gen.py
 ├── logs/            # 定时抓取日志
 └── README.md
@@ -185,26 +185,27 @@ make hot-news-publish-toutiao         # 填好标题/正文保持浏览器，人
 
 结论：头条更适合深度长文 + 平台图库素材的形态；营销短文自动发布仍以小红书为主力推手。
 
-## 定时刷新（launchd）
+## 手动刷新（不做后台定时）
 
-微博热搜是瞬时数据（15 分钟就换），固定人手抓会忘。仓库内置 launchd 调度：
-
-- **`weibo`**：每 **15 分钟**抓一次微博热搜，覆盖写 so 旧标题不累积（`refresh.sh` 默认模式）。
-- **`full`**：每天 **09:00** 全源抓取（weibo+kr36+sspai+qbitai+infoq），RSS 按 `--keep-days 7` 清理 7 天前旧文、按 `--max-age-days 2` 丢弃发布超 2 天的旧闻。
+微博热搜是瞬时数据（15 分钟就换）。**已移除 launchd 定时（2026-09），全部改为手动触发**——
+需要热点数据时手动跑一次，跑完即停，不占后台：
 
 ```bash
-make hot-news-cron-install      # 生成 plist 并 launchctl 加载；weibo 立即跑首轮，full 明早 9 点首次
-make hot-news-cron-status       # 查看两个 job 状态 / 最近退出码
-make hot-news-cron-uninstall    # 卸载（保留已生成的 plist 与日志）
-make hot-news-refresh           # 手动跑一遍（REFRESH_MODE=full 全源）
+make hot-news-refresh REFRESH_MODE=weibo   # 只抓微博热搜（默认）
+make hot-news-refresh REFRESH_MODE=full    # 全源（weibo + kr36/sspai/qbitai/infoq）
+# 或直接：
+bash tasks/hot-news/scheduler/refresh.sh           # weibo 模式
+bash tasks/hot-news/scheduler/refresh.sh full      # 全源模式
 ```
 
-日志：`tasks/hot-news/logs/refresh-{mode}-YYYYMMDD-HHMMSS.log`（每模式保留最近 30 份）+ launchd 收尾日志。
-调度器脚本：`tasks/hot-news/scheduler/{refresh.sh, install.sh, *.plist.tpl}`。安装脚本会自动探测 `uv` 与 `bash` 路径并写入 plist 环境（launchd 默认 PATH 不含它们，勿手改模板占位符）。
+日志：`tasks/hot-news/logs/refresh-{mode}-YYYYMMDD-HHMMSS.log`（每模式保留最近 30 份）。
+调度器脚本：`tasks/hot-news/scheduler/{refresh.sh, install.sh, *.plist.tpl}` 仍保留——
+若以后想恢复定时，`bash tasks/hot-news/scheduler/install.sh install` 会从模板重新生成 plist 并加载
+（安装脚本会自动探测 `uv` 与 `bash` 路径并写入 plist 环境，勿手改模板占位符）。
 
 ## 注意
 
 - 自动选题只选「语料有据」的热搜（weibo 纯标题不算），避免选中无信源话题后转写别的故事、导致 topic 与内容错位；`--topic` 显式指定时不强制，靠 planner/specialist 的「无据换角度」规则 + frontmatter 的 `heat_topic` 兜底。
-- `news/` 快照由 launchd 定时刷新（见上），无需每次手动 `make hot-news-fetch`；首次使用或修改了抓取开关后记得 `make hot-news-cron-install`。
+- `news/` 快照为手动刷新（见「手动刷新」节）：写文章前先 `make hot-news-refresh REFRESH_MODE=full` 抓一轮最新热点，再跑 `run.py`。
 - 纯 `--topic` 降级模式无事实对照，仅适合练手；正式产出务必提供 `--news-dir`。
 - 浏览器自动化发布处于平台 ToS 灰色地带，有封号风险，建议前期「生成 → 人工确认 → 手动发」。
