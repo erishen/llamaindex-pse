@@ -146,28 +146,44 @@ def _strip_tags(html: str) -> str:
     return re.sub(r"<[^>]+>", " ", html or "").strip()
 
 
-def _strip_repl(s: str) -> str:
-    """剔除源站自带、无法还原的替换字符 U+FFFD（如 36氪 feed 里的乱码「�」）。
+# 需清洗的不可渲染/替换字符：U+FFFD 替换符、U+FFFC 对象符、零宽与段落/方向控制符、
+# BOM、变体选择符，以及私用区图标字（iconfont 常用 U+E000–U+F8FF，如 InfoQ 的 U+E6xx）。
+_JUNK_CHARS = re.compile(
+    "[\ufffd\ufffc\u200b-\u200f\u2028\u2029\ufeff\ufe0e\ufe0f\ue000-\uf8ff]"
+)
 
-    36氪 RSS 会对部分字符直接输出 U+FFFD（字节 EF BF BD），非本地解码问题，
-    落盘前清掉，避免污染 RAG 语料与下游展示。
+
+def _clean_text(s: str) -> str:
+    """清洗源站自带的不可渲染字符。
+
+    - 36氪 RSS 直接输出 U+FFFD（字节 EF BF BD），源侧已丢失、不可还原；
+    - InfoQ 等站点用 iconfont 私用区码位（U+E000–U+F8FF）承载图标，抓正文时
+      会掺入摘要，浏览器显示为豆腐块（乱码）。
+    一并剔除并压缩空白，避免污染 RAG 语料与下游面板。
     """
-    return (s or "").replace("\ufffd", "")
+    return re.sub(r"\s+", " ", _JUNK_CHARS.sub("", s or "")).strip()
 
 
 def _html_to_text(html_doc: str) -> str:
-    """HTML → 纯文本：去掉脚本/样式/导航壳，转义实体，压缩空白。
+    """HTML → 纯文本：优先整块取 <article> 正文，转义实体，压缩空白并清洗乱码。
 
-    尽力而为，不追求解析站点自定义结构（页眉页脚可能掺入，但不足以证伪）。
+    优先取 <article> 以避开站点导航/页眉脚（InfoQ 等页眉菜单会混入正文）；
+    无 <article> 时退化为去脚本/样式/导航壳后再去标签。尽力而为，不追求解析
+    站点自定义结构（页眉页脚可能掺入，但不足以证伪）。
     """
-    text = re.sub(
-        r"(?is)<(script|style|head|noscript|nav|footer|aside)[^>]*>.*?</\1>",
-        " ",
-        html_doc or "",
-    )
+    doc = html_doc or ""
+    blocks = re.findall(r"(?is)<article\b[^>]*>(.*?)</article>", doc)
+    if blocks:
+        text = max(blocks, key=lambda b: len(_strip_tags(b)))
+    else:
+        text = re.sub(
+            r"(?is)<(script|style|head|noscript|nav|footer|aside)[^>]*>.*?</\1>",
+            " ",
+            doc,
+        )
     text = _strip_tags(text)
     text = html_mod.unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
+    return _clean_text(re.sub(r"\s+", " ", text).strip())
 
 
 def _fetch_body_one(it: dict, use_proxy: bool) -> None:
@@ -376,9 +392,9 @@ def _write(out_root: Path, source: str, items: list[dict], keep_days: int) -> in
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     n = 0
     for i, it in enumerate(items, 1):
-        title = _strip_repl(str(it["title"]))
-        url = _strip_repl(str(it.get("url") or ""))
-        body = _strip_repl(str(it.get("body") or ""))
+        title = _clean_text(str(it["title"]))
+        url = _clean_text(str(it.get("url") or ""))
+        body = _clean_text(str(it.get("body") or ""))
         fname = f"{i:02d}_{_safe_name(title)}.md"
         content = (
             "---\n"
