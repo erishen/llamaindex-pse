@@ -146,6 +146,15 @@ def _strip_tags(html: str) -> str:
     return re.sub(r"<[^>]+>", " ", html or "").strip()
 
 
+def _strip_repl(s: str) -> str:
+    """剔除源站自带、无法还原的替换字符 U+FFFD（如 36氪 feed 里的乱码「�」）。
+
+    36氪 RSS 会对部分字符直接输出 U+FFFD（字节 EF BF BD），非本地解码问题，
+    落盘前清掉，避免污染 RAG 语料与下游展示。
+    """
+    return (s or "").replace("\ufffd", "")
+
+
 def _html_to_text(html_doc: str) -> str:
     """HTML → 纯文本：去掉脚本/样式/导航壳，转义实体，压缩空白。
 
@@ -367,21 +376,23 @@ def _write(out_root: Path, source: str, items: list[dict], keep_days: int) -> in
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     n = 0
     for i, it in enumerate(items, 1):
-        fname = f"{i:02d}_{_safe_name(it['title'])}.md"
-        body = it.get("body") or ""
+        title = _strip_repl(str(it["title"]))
+        url = _strip_repl(str(it.get("url") or ""))
+        body = _strip_repl(str(it.get("body") or ""))
+        fname = f"{i:02d}_{_safe_name(title)}.md"
         content = (
             "---\n"
             f"source: {source}\n"
-            f"title: {it['title']}\n"
+            f"title: {title}\n"
             f"hot: {it['hot']}\n"
-            f"url: {it['url']}\n"
+            f"url: {url}\n"
             f"published_at: {it.get('published').strftime('%Y-%m-%d %H:%M') if it.get('published') else ''}\n"
             f"fetched_at: {ts}\n"
             "---\n\n"
-            f"# {it['title']}\n\n"
+            f"# {title}\n\n"
             f"- 平台: {source}\n"
             f"- 热度: {it['hot']}\n"
-            f"- 链接: {it['url']}\n\n"
+            f"- 链接: {url}\n\n"
         )
         if body:
             content += f"> 摘要：{body}\n\n"
