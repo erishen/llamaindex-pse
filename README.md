@@ -205,4 +205,4 @@ The distinctive edge here is RAG: siblings *detect-and-repair* hallucinations af
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
