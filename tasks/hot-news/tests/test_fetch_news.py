@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import fetch_news as fn
+import news_digest as nd
 
 
 class TestCleanText:
@@ -57,3 +58,30 @@ class TestWrite:
         for bad in ("\ue601", "\ue607", "\ufffd"):
             assert bad not in text
         assert "AI时代" in text
+
+
+class TestResolveOutDir:
+    """--out 的相对路径以任务目录为基准，不跟随 cwd。
+
+    否则在仓库根目录跑 `fetch_news.py --out news` 会把快照落到仓库根，
+    news_digest 再把总览 HTML 写到 news 的父目录，一并污染工作区（2026-11 发生过）。
+    """
+
+    def test_relative_resolves_under_task_dir(self):
+        assert fn.resolve_out_dir("news") == fn.BASE / "news"
+
+    def test_relative_with_dot_prefix(self):
+        assert fn.resolve_out_dir("./tmp/news") == (fn.BASE / "tmp" / "news").resolve()
+
+    def test_absolute_passthrough(self, tmp_path: Path):
+        assert fn.resolve_out_dir(str(tmp_path)) == tmp_path.resolve()
+
+
+class TestResolveNewsDir:
+    """单独跑 news_digest.py 时，相对目录同样以任务目录为基准。"""
+
+    def test_relative_resolves_under_task_dir(self):
+        assert nd.resolve_news_dir("news") == nd.BASE / "news"
+
+    def test_absolute_passthrough(self, tmp_path: Path):
+        assert nd.resolve_news_dir(str(tmp_path)) == tmp_path.resolve()

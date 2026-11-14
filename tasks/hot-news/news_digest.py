@@ -8,7 +8,8 @@
 
 用法：
   python news_digest.py                 # 读 news/ 生成 ../hot-news-overview.html
-  python news_digest.py /path/to/news  # 指定目录
+  python news_digest.py news            # 相对路径以 tasks/hot-news 为基准，不是 cwd
+  python news_digest.py /path/to/news   # 绝对路径原样使用
 """
 from __future__ import annotations
 
@@ -17,6 +18,22 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+# 任务目录：相对路径的解析基准（与 fetch_news.BASE 同一坐标系）
+BASE = Path(__file__).resolve().parent
+
+
+def resolve_news_dir(news_dir: str | Path) -> Path:
+    """把新闻目录解析成绝对路径。
+
+    相对路径以 BASE 为基准而非 cwd：否则在仓库根目录执行
+    `python tasks/hot-news/news_digest.py news` 会把总览 HTML 写到
+    news_dir.parent，也就是仓库根——2026-11 曾发生过。
+    """
+    p = Path(news_dir).expanduser()
+    if not p.is_absolute():
+        p = BASE / p
+    return p.resolve()
 
 # 展示元数据（颜色 / 中文名 / 品类）。与 fetch_news.SOURCES 的 key 对齐。
 SOURCE_META: dict[str, dict] = {
@@ -350,17 +367,17 @@ def _title_html(it: dict) -> str:
 
 
 def write_digest(news_dir: Path) -> Path:
-    # resolve() makes the dir absolute (cwd-relative input included). The path
+    # resolve() makes the dir absolute (BASE-relative input included). The path
     # returned here is printed verbatim into the chat bubble ("📊 总览已生成:
     # …"), and only absolute .html paths get linkified into a clickable
     # preview, so never hand back a relative one.
-    news_dir = Path(news_dir).resolve()
+    news_dir = resolve_news_dir(news_dir)
     out = news_dir.parent / "hot-news-overview.html"
     out.write_text(build_digest(news_dir), encoding="utf-8")
     return out
 
 
 if __name__ == "__main__":
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else (Path(__file__).resolve().parent / "news")
+    target = sys.argv[1] if len(sys.argv) > 1 else (BASE / "news")
     path = write_digest(target)
     print(f"✅ 总览已生成: {path}  ({path.stat().st_size} bytes)")

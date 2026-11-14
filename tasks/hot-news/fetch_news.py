@@ -47,6 +47,19 @@ BASE = Path(__file__).resolve().parent
 # 默认输出目录：与 hot-news 任务的 news-dir 消费约定对齐
 DEFAULT_OUT = BASE / "news"
 
+
+def resolve_out_dir(out: str | Path) -> Path:
+    """把 --out 解析成绝对路径。
+
+    相对路径以任务目录 BASE 为基准（而非 cwd）：否则在仓库根目录执行
+    `fetch_news.py --out news`（或 `make hot-news-fetch OUT=news`）会把快照
+    落到仓库根，连带 news_digest 的总览 HTML 一起污染工作区——2026-11 曾发生过。
+    """
+    p = Path(out).expanduser()
+    if not p.is_absolute():
+        p = BASE / p
+    return p.resolve()
+
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -450,7 +463,11 @@ def _clean_all(out_root: Path) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="抓取多平台热点新闻（落盘 Markdown 供 RAG grounding）")
-    ap.add_argument("--out", default=str(DEFAULT_OUT), help="输出根目录（默认 tasks/hot-news/news）")
+    ap.add_argument(
+        "--out",
+        default=str(DEFAULT_OUT),
+        help="输出根目录（默认 tasks/hot-news/news；相对路径以 tasks/hot-news 为基准，不是 cwd）",
+    )
     ap.add_argument("--sources", default="", help="逗号分隔平台，默认全部；可选: " + ",".join(SOURCES))
     ap.add_argument("--limit", type=int, default=30, help="每平台保留条数（默认 30）")
     ap.add_argument("--topic", default="", help="仅保留标题或正文含该关键词的热点")
@@ -487,12 +504,10 @@ def main() -> int:
     # ("▶ 抓取热点新闻 → …" / "✅ 完成：… → …" / "📊 总览已生成: …") echoes this
     # path, and the harness answer-prettifier can only turn *absolute* .html
     # paths into clickable /api/raw links — a relative --out showed up in the
-    # chat bubble as dead text. It also keeps os.getcwd()-relative surprises
-    # out of _write/_clean_old/_clean_all, which all walk out_root.
-    out_root = Path(args.out).expanduser()
-    if not out_root.is_absolute():
-        out_root = Path.cwd() / out_root
-    out_root = out_root.resolve()
+    # chat bubble as dead text. Relative values resolve against BASE (the task
+    # dir), not os.getcwd(), so running from the repo root can never drop
+    # snapshots into the repo root again.
+    out_root = resolve_out_dir(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
 
     args.exclude = [k.strip().lower() for k in (args.exclude or "").split(",") if k.strip()]
