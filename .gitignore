@@ -30,3 +30,6 @@ tasks/hot-news/publish/
 tasks/hot-news/logs/
 # 总览 HTML（约每 20 分钟由任务重生成，纯制品、会周期性变脏，不入库）
 tasks/hot-news/hot-news-overview.html
+# 根级兜底：在仓库根目录跑脚本时，相对路径会把上述产物落到外层（曾于 2026-11 发生过），一并忽略
+/news/
+/hot-news-overview.html
