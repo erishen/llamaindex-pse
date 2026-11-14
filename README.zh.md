@@ -190,7 +190,7 @@ result = asyncio.run(workflow.run(
 
 ## 许可证
 
-MIT
+MIT，见 [LICENSE](LICENSE)。
 
 ---
 
